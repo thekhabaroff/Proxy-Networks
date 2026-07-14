@@ -46,54 +46,9 @@
             <input id="name" type="text" />
           </label>
 
-          <div class="row">
-            <label class="field">
-              <span>Режим</span>
-              <select id="mode">
-                <option value="direct">direct</option>
-                <option value="auto_detect">auto_detect</option>
-                <option value="system">system</option>
-                <option value="fixed_servers">fixed_servers</option>
-                <option value="pac_script">pac_script</option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span>Область</span>
-              <label class="checkbox">
-                <input id="incognito" type="checkbox" />
-                <span>Только инкогнито</span>
-              </label>
-              <small class="hint">Для этого режима разрешите расширению доступ в инкогнито в chrome://extensions.</small>
-            </label>
-          </div>
-
           <section id="fixedServersSection" class="panel">
             <h3>Fixed servers</h3>
-            <div class="row">
-              <label class="field">
-                <span>Схема</span>
-                <select id="scheme">
-                  <option value="http">http</option>
-                  <option value="https">https</option>
-                  <option value="socks4">socks4</option>
-                  <option value="socks5">socks5</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Порт</span>
-                <input id="port" type="number" min="1" max="65535" />
-              </label>
-            </div>
-            <label class="field">
-              <span>Хост</span>
-              <input id="host" type="text" />
-            </label>
-            <label class="checkbox">
-              <input id="useAdvanced" type="checkbox" />
-              <span>Использовать раздельные прокси по протоколам</span>
-            </label>
-
+            <p class="hint">Расширение всегда использует режим fixed_servers и раздельные прокси по протоколам.</p>
             <div id="advancedSection" class="advanced">
               <label class="field">
                 <span>HTTP прокси</span>
@@ -139,15 +94,6 @@
             <label class="field">
               <span>Исключения, по одному на строку</span>
               <textarea id="bypassList" rows="4"></textarea>
-            </label>
-          </section>
-
-          <section id="pacSection" class="panel hidden">
-            <h3>PAC-скрипт</h3>
-            <p>Пример fallback: <code>return "DIRECT";</code></p>
-            <label class="field">
-              <span>Содержимое PAC</span>
-              <textarea id="pacScript" rows="10"></textarea>
             </label>
           </section>
 

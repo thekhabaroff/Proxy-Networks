@@ -61,8 +61,7 @@ function getDefaults() {
 }
 
 function normalizeMode(mode) {
-  const allowedModes = ['direct', 'auto_detect', 'system', 'fixed_servers', 'pac_script'];
-  return allowedModes.includes(mode) ? mode : 'direct';
+  return 'fixed_servers';
 }
 
 function normalizeScheme(scheme, fallback = 'http') {
@@ -108,7 +107,37 @@ function normalizeEndpoint(endpoint, fallbackScheme = 'http') {
   };
 }
 
+function buildAdvancedEndpoints(profile) {
+  const proxyForHttp = normalizeEndpoint(profile.proxyForHttp, 'http');
+  const proxyForHttps = normalizeEndpoint(profile.proxyForHttps, 'https');
+  const socks = normalizeEndpoint(profile.socks, 'socks5');
+
+  if (proxyForHttp || proxyForHttps || socks) {
+    return { proxyForHttp, proxyForHttps, socks };
+  }
+
+  const host = normalizeHost(profile.host);
+  const port = normalizePort(profile.port);
+  if (!host || !port) {
+    return { proxyForHttp: null, proxyForHttps: null, socks: null };
+  }
+
+  const scheme = normalizeScheme(profile.scheme);
+  const endpoint = { scheme, host, port };
+  if (scheme === 'socks4' || scheme === 'socks5') {
+    return { proxyForHttp: null, proxyForHttps: null, socks: endpoint };
+  }
+
+  return {
+    proxyForHttp: endpoint,
+    proxyForHttps: { ...endpoint, scheme: scheme === 'https' ? 'https' : 'http' },
+    socks: null,
+  };
+}
+
 function normalizeStoredProfile(profile) {
+  const advancedEndpoints = buildAdvancedEndpoints(profile);
+
   return {
     id: profile.id || '',
     name: profile.name ?? '',
@@ -116,15 +145,15 @@ function normalizeStoredProfile(profile) {
     scheme: normalizeScheme(profile.scheme),
     host: normalizeHost(profile.host),
     port: normalizePort(profile.port),
-    useAdvanced: Boolean(profile.useAdvanced),
-    proxyForHttp: normalizeEndpoint(profile.proxyForHttp, 'http'),
-    proxyForHttps: normalizeEndpoint(profile.proxyForHttps, 'https'),
-    socks: normalizeEndpoint(profile.socks, 'socks5'),
+    useAdvanced: true,
+    proxyForHttp: advancedEndpoints.proxyForHttp,
+    proxyForHttps: advancedEndpoints.proxyForHttps,
+    socks: advancedEndpoints.socks,
     bypassList: normalizeBypassList(profile.bypassList),
     pacScript: profile.pacScript ?? '',
     username: profile.username ?? '',
     password: profile.password ?? '',
-    incognito: Boolean(profile.incognito),
+    incognito: false,
   };
 }
 

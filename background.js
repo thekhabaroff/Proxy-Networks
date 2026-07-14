@@ -77,19 +77,6 @@ function endpointToProxyServer(endpoint) {
   };
 }
 
-function extensionIsAllowedIncognitoAccess() {
-  return new Promise((resolve) => {
-    if (!chrome.extension?.isAllowedIncognitoAccess) {
-      resolve(false);
-      return;
-    }
-
-    chrome.extension.isAllowedIncognitoAccess((isAllowed) => {
-      resolve(Boolean(isAllowed));
-    });
-  });
-}
-
 export function buildProxyConfig(profile) {
   if (!profile) {
     return { mode: 'direct' };
@@ -149,13 +136,8 @@ export function buildProxyConfig(profile) {
 }
 
 async function applyProfile(profile) {
-  if (profile.incognito && !(await extensionIsAllowedIncognitoAccess())) {
-    throw new Error('Для профиля инкогнито разрешите расширению доступ в инкогнито в chrome://extensions');
-  }
-
   const config = buildProxyConfig(profile);
-  const scope = profile.incognito ? 'incognito_session_only' : 'regular';
-  await proxySet(config, scope);
+  await proxySet(config, 'regular');
   await setLastError(null);
   return config;
 }

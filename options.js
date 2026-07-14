@@ -13,11 +13,6 @@ const formTitle = document.getElementById('formTitle');
 const profileForm = document.getElementById('profileForm');
 const profileIdInput = document.getElementById('profileId');
 const nameInput = document.getElementById('name');
-const modeInput = document.getElementById('mode');
-const schemeInput = document.getElementById('scheme');
-const hostInput = document.getElementById('host');
-const portInput = document.getElementById('port');
-const useAdvancedInput = document.getElementById('useAdvanced');
 const httpSchemeInput = document.getElementById('httpScheme');
 const httpHostInput = document.getElementById('httpHost');
 const httpPortInput = document.getElementById('httpPort');
@@ -28,13 +23,8 @@ const socksSchemeInput = document.getElementById('socksScheme');
 const socksHostInput = document.getElementById('socksHost');
 const socksPortInput = document.getElementById('socksPort');
 const bypassListInput = document.getElementById('bypassList');
-const pacScriptInput = document.getElementById('pacScript');
 const usernameInput = document.getElementById('username');
 const passwordInput = document.getElementById('password');
-const incognitoInput = document.getElementById('incognito');
-const fixedServersSection = document.getElementById('fixedServersSection');
-const advancedSection = document.getElementById('advancedSection');
-const pacSection = document.getElementById('pacSection');
 const formError = document.getElementById('formError');
 const formSuccess = document.getElementById('formSuccess');
 const deleteButton = document.getElementById('deleteButton');
@@ -46,7 +36,7 @@ const importProfilesInput = document.getElementById('importProfilesInput');
 const togglePasswordButton = document.getElementById('togglePasswordButton');
 const clearPasswordButton = document.getElementById('clearPasswordButton');
 
-const ALLOWED_MODES = ['direct', 'auto_detect', 'system', 'fixed_servers', 'pac_script'];
+const FIXED_SERVERS_MODE = 'fixed_servers';
 const ALLOWED_SCHEMES = ['http', 'https', 'socks4', 'socks5'];
 
 let profiles = [];
@@ -98,19 +88,6 @@ function formatBypassList(items) {
   return Array.isArray(items) ? items.join('\n') : '';
 }
 
-function endpointFromInputs(schemeInputEl, hostInputEl, portInputEl) {
-  const host = hostInputEl.value.trim();
-  const port = Number(portInputEl.value);
-  if (!host && !portInputEl.value.trim()) {
-    return null;
-  }
-  return {
-    scheme: schemeInputEl.value,
-    host,
-    port,
-  };
-}
-
 function parseProxyUrl(value) {
   const trimmed = value.trim();
   if (!trimmed.includes('://')) {
@@ -125,21 +102,61 @@ function parseProxyUrl(value) {
       port: url.port ? Number(url.port) : 0,
     };
   } catch (error) {
+    console.warn('Unable to parse proxy URL:', error);
     return null;
   }
 }
 
-function normalizeProxyUrlInput(profile) {
-  const parsed = parseProxyUrl(profile.host);
-  if (!parsed) {
-    return profile;
+function endpointFromInputs(schemeInputEl, hostInputEl, portInputEl) {
+  const parsed = parseProxyUrl(hostInputEl.value);
+  const host = parsed?.host ?? hostInputEl.value.trim();
+  const port = parsed?.port || Number(portInputEl.value);
+  const scheme = parsed?.scheme || schemeInputEl.value;
+
+  if (!host && !portInputEl.value.trim()) {
+    return null;
   }
 
   return {
-    ...profile,
-    scheme: parsed.scheme || profile.scheme,
-    host: parsed.host,
-    port: parsed.port || profile.port,
+    scheme,
+    host,
+    port,
+  };
+}
+
+function endpointsFromLegacySingleProxy(profile) {
+  if (profile.proxyForHttp || profile.proxyForHttps || profile.socks) {
+    return {
+      proxyForHttp: profile.proxyForHttp ?? null,
+      proxyForHttps: profile.proxyForHttps ?? null,
+      socks: profile.socks ?? null,
+    };
+  }
+
+  const host = typeof profile.host === 'string' ? profile.host.trim() : '';
+  const port = Number(profile.port);
+  if (!host || !port) {
+    return {
+      proxyForHttp: null,
+      proxyForHttps: null,
+      socks: null,
+    };
+  }
+
+  const scheme = ALLOWED_SCHEMES.includes(profile.scheme) ? profile.scheme : 'http';
+  const endpoint = { scheme, host, port };
+  if (scheme === 'socks4' || scheme === 'socks5') {
+    return {
+      proxyForHttp: null,
+      proxyForHttps: null,
+      socks: endpoint,
+    };
+  }
+
+  return {
+    proxyForHttp: endpoint,
+    proxyForHttps: { ...endpoint, scheme: scheme === 'https' ? 'https' : 'http' },
+    socks: null,
   };
 }
 
@@ -151,13 +168,9 @@ function isValidPort(port) {
   return Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535;
 }
 
-function setFieldVisibility() {
-  const mode = modeInput.value;
-  const isFixed = mode === 'fixed_servers';
-  const isPac = mode === 'pac_script';
-  fixedServersSection.classList.toggle('hidden', !isFixed);
-  pacSection.classList.toggle('hidden', !isPac);
-  advancedSection.classList.toggle('hidden', !useAdvancedInput.checked || !isFixed);
+function profileWithoutIncognito(profile) {
+  const { incognito, ...rest } = profile;
+  return rest;
 }
 
 function renderProfileList() {
@@ -178,11 +191,6 @@ function renderProfileList() {
 function fillForm(profile) {
   profileIdInput.value = profile?.id ?? '';
   nameInput.value = profile?.name ?? '';
-  modeInput.value = profile?.mode ?? 'direct';
-  schemeInput.value = profile?.scheme ?? 'http';
-  hostInput.value = profile?.host ?? '';
-  portInput.value = profile?.port ? String(profile.port) : '';
-  useAdvancedInput.checked = Boolean(profile?.useAdvanced);
   httpSchemeInput.value = profile?.proxyForHttp?.scheme ?? 'http';
   httpHostInput.value = profile?.proxyForHttp?.host ?? '';
   httpPortInput.value = profile?.proxyForHttp?.port ? String(profile.proxyForHttp.port) : '';
@@ -193,14 +201,11 @@ function fillForm(profile) {
   socksHostInput.value = profile?.socks?.host ?? '';
   socksPortInput.value = profile?.socks?.port ? String(profile.socks.port) : '';
   bypassListInput.value = formatBypassList(profile?.bypassList ?? []);
-  pacScriptInput.value = profile?.pacScript ?? '';
   usernameInput.value = profile?.username ?? '';
   passwordInput.value = profile?.password ?? '';
   passwordInput.type = 'password';
   togglePasswordButton.textContent = 'Показать пароль';
-  incognitoInput.checked = Boolean(profile?.incognito);
   formTitle.textContent = profile?.id ? `Профиль: ${profile.name || profile.id}` : 'Новый профиль';
-  setFieldVisibility();
   deleteButton.disabled = !profile?.id;
   activateButton.disabled = !profile?.id;
 }
@@ -229,29 +234,9 @@ function validateProfile(data) {
     return 'Введите название профиля.';
   }
 
-  if (!ALLOWED_MODES.includes(data.mode)) {
-    return 'Выбран неизвестный режим прокси.';
-  }
-
-  if (data.mode === 'fixed_servers' && !data.useAdvanced) {
-    if (!ALLOWED_SCHEMES.includes(data.scheme)) {
-      return 'Выбрана неизвестная схема прокси.';
-    }
-    if (!isValidHost(data.host)) {
-      return 'Укажите корректный хост прокси без http://, путей и пробелов.';
-    }
-    if (!isValidPort(data.port)) {
-      return 'Порт должен быть числом от 1 до 65535.';
-    }
-  }
-
-  if (data.mode === 'pac_script' && !data.pacScript.trim()) {
-    return 'Укажите PAC-скрипт.';
-  }
-
   const endpoints = [data.proxyForHttp, data.proxyForHttps, data.socks].filter(Boolean);
-  if (data.mode === 'fixed_servers' && data.useAdvanced && endpoints.length === 0) {
-    return 'Заполните хотя бы один прокси-эндпоинт в расширенном режиме.';
+  if (endpoints.length === 0) {
+    return 'Заполните хотя бы один прокси-эндпоинт.';
   }
 
   for (const endpoint of endpoints) {
@@ -270,31 +255,22 @@ function validateProfile(data) {
 }
 
 function collectProfile() {
-  const useAdvanced = useAdvancedInput.checked;
-  let profile = {
+  return {
     id: profileIdInput.value || undefined,
     name: nameInput.value.trim(),
-    mode: modeInput.value,
-    scheme: schemeInput.value,
-    host: hostInput.value.trim(),
-    port: Number(portInput.value),
-    useAdvanced,
-    proxyForHttp: useAdvanced ? endpointFromInputs(httpSchemeInput, httpHostInput, httpPortInput) : null,
-    proxyForHttps: useAdvanced ? endpointFromInputs(httpsSchemeInput, httpsHostInput, httpsPortInput) : null,
-    socks: useAdvanced ? endpointFromInputs(socksSchemeInput, socksHostInput, socksPortInput) : null,
+    mode: FIXED_SERVERS_MODE,
+    scheme: 'http',
+    host: '',
+    port: 0,
+    useAdvanced: true,
+    proxyForHttp: endpointFromInputs(httpSchemeInput, httpHostInput, httpPortInput),
+    proxyForHttps: endpointFromInputs(httpsSchemeInput, httpsHostInput, httpsPortInput),
+    socks: endpointFromInputs(socksSchemeInput, socksHostInput, socksPortInput),
     bypassList: parseBypassList(bypassListInput.value),
-    pacScript: pacScriptInput.value,
+    pacScript: '',
     username: usernameInput.value.trim(),
     password: passwordInput.value,
-    incognito: incognitoInput.checked,
   };
-
-  if (Number.isNaN(profile.port)) {
-    profile.port = 0;
-  }
-
-  profile = normalizeProxyUrlInput(profile);
-  return profile;
 }
 
 async function refreshAfterSave(savedProfile) {
@@ -372,8 +348,10 @@ testProfileButton.addEventListener('click', async () => {
 
 exportProfilesButton.addEventListener('click', async () => {
   const includePasswords = confirm('Экспортировать профили вместе с паролями? Нажмите “Отмена”, чтобы экспортировать без паролей.');
-  const exportedProfiles = (await getProfiles()).map((profile) => ({
+  const exportedProfiles = (await getProfiles()).map((profile) => profileWithoutIncognito({
     ...profile,
+    mode: FIXED_SERVERS_MODE,
+    useAdvanced: true,
     password: includePasswords ? profile.password : '',
   }));
   const blob = new Blob([JSON.stringify({ version: 1, profiles: exportedProfiles }, null, 2)], {
@@ -408,8 +386,11 @@ importProfilesInput.addEventListener('change', async () => {
     for (const profile of importedProfiles) {
       const preparedProfile = {
         ...profile,
+        ...endpointsFromLegacySingleProxy(profile),
         id: undefined,
         name: profile.name ? `${profile.name} (import)` : 'Imported profile',
+        mode: FIXED_SERVERS_MODE,
+        useAdvanced: true,
       };
       const validationError = validateProfile(preparedProfile);
       if (validationError) {
@@ -440,8 +421,5 @@ clearPasswordButton.addEventListener('click', () => {
   showError('');
   showSuccess('Пароль очищен в форме. Нажмите “Сохранить”, чтобы применить изменение.');
 });
-
-modeInput.addEventListener('change', setFieldVisibility);
-useAdvancedInput.addEventListener('change', setFieldVisibility);
 
 await loadProfiles();
