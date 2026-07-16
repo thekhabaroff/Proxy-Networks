@@ -102,7 +102,7 @@ npm run check
 
 ```text
 .
-├── manifest.json          # Manifest V3
+├── manifest.json         # Manifest V3
 ├── background.js         # service worker, авторизация и проверки
 ├── config.js             # построение правил chrome.proxy
 ├── storage.js            # хранение профилей и шифрование паролей
