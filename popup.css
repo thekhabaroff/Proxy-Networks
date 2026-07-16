@@ -184,6 +184,15 @@ select:focus-visible,
   color: var(--muted);
 }
 
+.ip {
+  transition: opacity 260ms ease, transform 260ms ease;
+}
+
+.ip.updating {
+  opacity: 0.48;
+  transform: translateY(1px);
+}
+
 .tips {
   margin: 0;
   padding-left: 18px;

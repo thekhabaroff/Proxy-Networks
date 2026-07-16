@@ -155,6 +155,7 @@ function normalizeStoredProfile(profile) {
     proxyForHttps: advancedEndpoints.proxyForHttps,
     socks: advancedEndpoints.socks,
     bypassList: normalizeBypassList(profile.bypassList),
+    blockList: normalizeBypassList(profile.blockList),
     username: typeof profile.username === 'string' ? profile.username.trim() : '',
     password: typeof profile.password === 'string' ? profile.password : '',
   };

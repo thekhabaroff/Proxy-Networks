@@ -19,6 +19,7 @@ const httpsPortInput = document.getElementById('httpsPort');
 const socksHostInput = document.getElementById('socksHost');
 const socksPortInput = document.getElementById('socksPort');
 const bypassListInput = document.getElementById('bypassList');
+const blockListInput = document.getElementById('blockList');
 const usernameInput = document.getElementById('username');
 const passwordInput = document.getElementById('password');
 const formError = document.getElementById('formError');
@@ -206,6 +207,7 @@ function fillForm(profile) {
   socksHostInput.value = profile?.socks?.host ?? '';
   socksPortInput.value = profile?.socks?.port ? String(profile.socks.port) : '';
   bypassListInput.value = formatBypassList(profile?.bypassList ?? []);
+  blockListInput.value = formatBypassList(profile?.blockList ?? []);
   usernameInput.value = profile?.username ?? '';
   passwordInput.value = profile?.password ?? '';
   passwordInput.type = 'password';
@@ -281,6 +283,7 @@ function collectProfile() {
     proxyForHttps: endpointFromInputs('https', httpsHostInput, httpsPortInput),
     socks: endpointFromInputs('socks5', socksHostInput, socksPortInput),
     bypassList: parseBypassList(bypassListInput.value),
+    blockList: parseBypassList(blockListInput.value),
     username: usernameInput.value.trim(),
     password: passwordInput.value,
   };
@@ -418,6 +421,7 @@ exportProfilesButton.addEventListener('click', async () => {
       proxyForHttps: profile.proxyForHttps,
       socks: profile.socks,
       bypassList: profile.bypassList,
+      blockList: profile.blockList,
       username: profile.username,
       password: includePasswords ? profile.password : '',
     }));

@@ -2,6 +2,40 @@ export const PROTOCOLS = Object.freeze(['auto', 'http', 'https', 'socks']);
 
 const PROXY_SCHEMES = new Set(['http', 'https', 'socks5']);
 
+function bypassEntryToAscii(entry) {
+  if (typeof entry !== 'string') {
+    return '';
+  }
+
+  const value = entry.trim();
+  if (!value || !/[^\x00-\x7F]/.test(value)) {
+    return value;
+  }
+
+  // Chrome accepts only ASCII URL patterns in proxy bypassList. Keep its
+  // special tokens, wildcards and IP/CIDR entries intact while converting
+  // internationalized domain names to their ASCII/Punycode form.
+  const wildcard = value.startsWith('*.');
+  const hostname = wildcard ? value.slice(2) : value;
+
+  try {
+    const asciiHostname = new URL(`http://${hostname}`).hostname;
+    return wildcard ? `*.${asciiHostname}` : asciiHostname;
+  } catch {
+    // Leave malformed entries untouched so validation/error reporting can
+    // still identify the value supplied by the user.
+    return value;
+  }
+}
+
+function normalizeBypassListForChrome(bypassList) {
+  if (!Array.isArray(bypassList)) {
+    return [];
+  }
+
+  return [...new Set(bypassList.map(bypassEntryToAscii).filter(Boolean))];
+}
+
 export function endpointToProxyServer(endpoint) {
   if (!endpoint || typeof endpoint.host !== 'string') {
     return null;
@@ -31,7 +65,7 @@ export function buildProxyConfig(profile) {
   if (httpsProxy) rules.proxyForHttps = httpsProxy;
   if (socksProxy) rules.fallbackProxy = socksProxy;
   if (Array.isArray(profile.bypassList) && profile.bypassList.length > 0) {
-    rules.bypassList = profile.bypassList;
+    rules.bypassList = normalizeBypassListForChrome(profile.bypassList);
   }
 
   return httpProxy || httpsProxy || socksProxy
@@ -61,7 +95,7 @@ export function buildSelectedProxyConfig(profile, protocol = 'auto') {
     mode: 'fixed_servers',
     rules: {
       singleProxy: server,
-      bypassList: Array.isArray(profile.bypassList) ? profile.bypassList : [],
+      bypassList: normalizeBypassListForChrome(profile.bypassList),
     },
   };
 }

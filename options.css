@@ -57,10 +57,21 @@ textarea {
 }
 
 .window-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 2px 2px 18px;
+}
+
+.window-header h1 {
+  position: absolute;
+  left: 50%;
+  margin: 0;
+  transform: translateX(-50%);
+  font-size: 15px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
 }
 
 .traffic-light {
@@ -76,15 +87,10 @@ textarea {
 .traffic-light.yellow { background: #febc2e; }
 .traffic-light.green { background: #28c840; }
 
-.sidebar-header h1,
 .editor-header h2 {
   margin: 0;
   letter-spacing: -0.02em;
   font-weight: 600;
-}
-
-.sidebar-header h1 {
-  font-size: 15px;
 }
 
 .editor-header h2 {
@@ -99,6 +105,14 @@ textarea {
   gap: 12px;
 }
 
+.sidebar-header {
+  margin-top: 0;
+}
+
+.sidebar-header #newProfileButton {
+  width: 100%;
+}
+
 .import-export,
 .inline-actions {
   display: flex;
@@ -108,6 +122,10 @@ textarea {
 
 .import-export {
   margin-top: 12px;
+}
+
+.import-export > button {
+  flex: 1 1 0;
 }
 
 .editor-header p {
@@ -122,6 +140,27 @@ textarea {
   max-height: calc(100vh - 110px);
   overflow: auto;
   padding-right: 2px;
+}
+
+.sidebar-link {
+  display: block;
+  margin-top: 18px;
+  padding: 9px 10px;
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  color: var(--accent);
+  text-decoration: none;
+  text-align: center;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.sidebar-link:hover {
+  background: rgba(45, 143, 255, 0.12);
+  border-color: rgba(45, 143, 255, 0.55);
+}
+
+.sidebar-link + .sidebar-link {
+  margin-top: 8px;
 }
 
 .profile-item {

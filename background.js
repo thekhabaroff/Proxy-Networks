@@ -3,6 +3,7 @@ import {
   getEnabled,
   getLastError,
   getProfile,
+  getProfiles,
   getSelectedProtocol,
   setEnabled,
   setLastError,
@@ -10,6 +11,12 @@ import {
   setSelectedProtocol,
   initializeDefaults,
 } from './storage.js';
+import {
+  geositeNamesFromProfiles,
+  refreshGeositeCaches,
+  resolveGeositeBypassList,
+} from './geosite.js';
+import { updateBlockRules } from './blocker.js';
 import {
   buildProxyConfig,
   buildSelectedProxyConfig,
@@ -26,6 +33,16 @@ let proxyHealthCheckInProgress = false;
 let endpointTestAuth = null;
 let pendingProfileAuth = null;
 let ignoreProxyErrorsUntil = 0;
+
+async function profileWithResolvedBypassList(profile) {
+  if (!profile || !Array.isArray(profile.bypassList)) {
+    return profile;
+  }
+  return {
+    ...profile,
+    bypassList: await resolveGeositeBypassList(profile.bypassList),
+  };
+}
 
 function normalizeProxyHost(host) {
   return String(host ?? '')
@@ -109,6 +126,10 @@ async function applyProfile(profile, protocol = 'auto') {
   if (!PROTOCOLS.includes(protocol)) {
     throw new Error('Неизвестный протокол прокси.');
   }
+  // Old block rules may block GitHub, which is also the geosite source.
+  if (await getEnabled()) {
+    await updateBlockRules([]);
+  }
   let resolvedProtocol = protocol;
   if (protocol !== 'auto') {
     const endpoint = protocol === 'http'
@@ -118,20 +139,28 @@ async function applyProfile(profile, protocol = 'auto') {
         : profile?.socks;
     if (!endpointToProxyServer(endpoint)) resolvedProtocol = 'auto';
   }
-  const config = buildSelectedProxyConfig(profile, resolvedProtocol);
+  const resolvedProfile = await profileWithResolvedBypassList(profile);
+  const config = buildSelectedProxyConfig(resolvedProfile, resolvedProtocol);
   if (config.mode === 'direct') {
     throw new Error('В профиле не настроен ни один прокси.');
   }
   await proxySet(config, 'regular');
+  if (await getEnabled()) {
+    await updateBlockRules(profile.blockList);
+  }
   await setSelectedProtocol(resolvedProtocol);
   await setLastError(null);
   return config;
 }
 
 async function disableAll() {
-  await proxySet({ mode: 'direct' }, 'regular');
-  await setEnabled(false);
-  await setLastError(null);
+  try {
+    await proxySet({ mode: 'direct' }, 'regular');
+  } finally {
+    await updateBlockRules([]);
+    await setEnabled(false);
+    await setLastError(null);
+  }
 }
 
 async function enableActiveProfile(protocol = null) {
@@ -209,6 +238,15 @@ async function fetchExternalIp() {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function fetchExternalIpWithPing() {
+  const startedAt = performance.now();
+  const ip = await fetchExternalIp();
+  return {
+    ip,
+    ping: Math.max(1, Math.round(performance.now() - startedAt)),
+  };
 }
 
 chrome.proxy.onProxyError.addListener(async (details) => {
@@ -317,9 +355,11 @@ async function testProxyEndpoint(endpoint, credentials) {
     const protocol = await getSelectedProtocol();
     if (enabled && activeProfile) {
       try {
-        previousConfig = buildSelectedProxyConfig(activeProfile, protocol);
+        const resolvedProfile = await profileWithResolvedBypassList(activeProfile);
+        previousConfig = buildSelectedProxyConfig(resolvedProfile, protocol);
       } catch {
-        previousConfig = buildProxyConfig(activeProfile);
+        const resolvedProfile = await profileWithResolvedBypassList(activeProfile);
+        previousConfig = buildProxyConfig(resolvedProfile);
       }
     }
 
@@ -349,6 +389,8 @@ async function restoreStoredState() {
     await initializeDefaults();
     if (await getEnabled()) {
       await enableActiveProfile();
+    } else {
+      await updateBlockRules([]);
     }
   } catch (error) {
     try {
@@ -363,11 +405,48 @@ async function restoreStoredState() {
   }
 }
 
+async function scheduleGeositeRefresh() {
+  const now = new Date();
+  const nextMidnight = new Date(now);
+  nextMidnight.setDate(now.getDate() + 1);
+  nextMidnight.setHours(0, 0, 0, 0);
+  await chrome.alarms.create('geosite-daily-refresh', {
+    when: nextMidnight.getTime(),
+    periodInMinutes: 24 * 60,
+  });
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'geosite-daily-refresh') {
+    return;
+  }
+
+  const profiles = await getProfiles();
+  if (await getEnabled()) {
+    await updateBlockRules([]);
+  }
+  const result = await refreshGeositeCaches(geositeNamesFromProfiles(profiles));
+  if (result.failed.length) {
+    console.warn('Unable to refresh geosite bases:', result.failed);
+  }
+  if (result.refreshed.length && await getEnabled()) {
+    try {
+      await enableActiveProfile(await getSelectedProtocol());
+      await updateActionIcon();
+    } catch (error) {
+      await setLastError(error instanceof Error ? error.message : String(error));
+      await updateActionIcon();
+    }
+  }
+});
+
 chrome.runtime.onStartup.addListener(async () => {
+  await scheduleGeositeRefresh();
   await restoreStoredState();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
+  await scheduleGeositeRefresh();
   await restoreStoredState();
 });
 
@@ -385,9 +464,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const selectedProtocol = message.protocol ?? await getSelectedProtocol();
       pendingProfileAuth = authScopeForProfile(profile, selectedProtocol);
       try {
+        await updateBlockRules([]);
         await applyProfile(profile, selectedProtocol);
         await setActiveProfileId(targetProfileId);
         await setEnabled(true);
+        await updateBlockRules(profile.blockList);
       } finally {
         pendingProfileAuth = null;
       }
@@ -443,6 +524,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return;
     }
 
+    if (message.action === 'syncBlockRules') {
+      if (!await getEnabled()) {
+        await updateBlockRules([]);
+      } else {
+        await updateBlockRules([]);
+        const activeProfileId = await getActiveProfileId();
+        const activeProfile = activeProfileId ? await getProfile(activeProfileId) : null;
+        await updateBlockRules(activeProfile?.blockList ?? []);
+      }
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (message.action === 'checkProxy') {
       if (endpointCheckInProgress) {
         sendResponse({
@@ -454,13 +548,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
       try {
-        const ip = await fetchExternalIp();
+        const result = await fetchExternalIpWithPing();
         if (await getEnabled()) await setLastError(null);
         await updateActionIcon();
         const status = await getStatus();
         sendResponse({
           ok: true,
-          ip,
+          ip: result.ip,
+          ping: result.ping,
           status,
           tips: [],
         });

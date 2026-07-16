@@ -9,6 +9,7 @@ const protocolSelect = document.getElementById('protocolSelect');
 const protocolField = document.getElementById('protocolField');
 const statusLine = document.getElementById('statusLine');
 const ipLine = document.getElementById('ipLine');
+const pingLine = document.getElementById('pingLine');
 const errorBanner = document.getElementById('errorBanner');
 const toggleLabel = document.getElementById('toggleLabel');
 const refreshIpButton = document.getElementById('refreshIpButton');
@@ -19,6 +20,7 @@ let profilesCache = [];
 let currentEnabled = false;
 let currentActiveProfileId = null;
 let currentProtocol = 'auto';
+let refreshInProgress = false;
 
 function sendMessage(message) {
   return new Promise((resolve, reject) => {
@@ -42,11 +44,13 @@ async function sendCommand(message) {
 }
 
 async function loadStatus() {
+  await sendMessage({ action: 'syncBlockRules' });
   const response = await sendMessage({ action: 'getStatus' });
   currentEnabled = Boolean(response?.enabled);
   currentActiveProfileId = response?.activeProfileId ?? null;
   currentProtocol = response?.selectedProtocol ?? 'auto';
   enabledToggle.checked = currentEnabled;
+  pingLine.classList.toggle('hidden', !currentEnabled);
   protocolField.classList.toggle('hidden', !currentActiveProfileId);
   toggleLabel.textContent = currentEnabled ? 'Прокси включён' : 'Прокси выключен';
   statusLine.textContent = currentEnabled ? `Активен: ${response?.activeProfileName ?? 'без названия'}` : '';
@@ -121,33 +125,53 @@ function showPopupError(message) {
   errorBanner.classList.toggle('hidden', !message);
 }
 
+function updateLiveText(element, text) {
+  element.classList.add('updating');
+  element.textContent = text;
+  requestAnimationFrame(() => {
+    element.classList.remove('updating');
+  });
+}
+
 async function refreshIp() {
-  if (refreshIpButton.disabled) return;
+  if (refreshIpButton.disabled || refreshInProgress) return;
+  refreshInProgress = true;
   refreshIpButton.disabled = true;
-  ipLine.textContent = 'Текущий IP: ...';
+  ipLine.classList.add('updating');
+  pingLine.classList.add('updating');
   tipsList.innerHTML = '';
   tipsList.classList.add('hidden');
   try {
     const response = await sendMessage({ action: 'checkProxy' });
     if (!response?.ok) {
       if (response?.busy) {
-        ipLine.textContent = 'Текущий IP: выполняется проверка прокси';
+        updateLiveText(ipLine, 'Текущий IP: выполняется проверка прокси');
         return;
       }
-      ipLine.textContent = `Текущий IP: ошибка (${response?.error ?? 'Не удалось проверить IP'})`;
+      updateLiveText(ipLine, `Текущий IP: ошибка (${response?.error ?? 'Не удалось проверить IP'})`);
+      updateLiveText(pingLine, 'Пинг: —');
       if (currentEnabled) showPopupError(response?.error ?? 'Не удалось проверить IP');
       renderTips(response?.tips);
       return;
     }
-    ipLine.textContent = `Текущий IP: ${response.ip ?? 'неизвестен'}`;
+    updateLiveText(ipLine, `Текущий IP: ${response.ip ?? 'неизвестен'}`);
+    updateLiveText(pingLine, currentEnabled && Number.isFinite(response.ping)
+      ? `Пинг: ${response.ping} мс`
+      : 'Пинг: —');
     showPopupError('');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    ipLine.textContent = `Текущий IP: ошибка (${message})`;
+    updateLiveText(ipLine, `Текущий IP: ошибка (${message})`);
+    updateLiveText(pingLine, 'Пинг: —');
     if (currentEnabled) showPopupError(message);
     renderTips();
   } finally {
     refreshIpButton.disabled = false;
+    refreshInProgress = false;
+    requestAnimationFrame(() => {
+      ipLine.classList.remove('updating');
+      pingLine.classList.remove('updating');
+    });
   }
 }
 
@@ -215,6 +239,7 @@ profileSelect.addEventListener('change', async () => {
     }
     await loadProfiles();
     await loadStatus();
+    await refreshIp();
   } catch (error) {
     await loadProfiles();
     await loadStatus();
@@ -230,6 +255,7 @@ protocolSelect.addEventListener('change', async () => {
     if (currentActiveProfileId) {
       await sendCommand({ action: 'applyProfile', profileId: currentActiveProfileId, protocol: protocolSelect.value });
       await loadStatus();
+      await refreshIp();
     }
   } catch (error) {
     await loadStatus();
@@ -254,3 +280,7 @@ try {
 } catch (error) {
   showPopupError(error instanceof Error ? error.message : String(error));
 }
+
+setInterval(() => {
+  refreshIp();
+}, 5000);
