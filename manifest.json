@@ -9,9 +9,9 @@
     "webRequestAuthProvider",
     "storage",
     "alarms",
-    "declarativeNetRequest"
+    "declarativeNetRequestWithHostAccess"
   ],
-    "declarative_net_request": {
+  "declarative_net_request": {
     "rule_resources": [
       {
         "id": "trackers_rules",

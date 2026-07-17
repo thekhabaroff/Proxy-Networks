@@ -1,3 +1,11 @@
+import {
+  normalizePort,
+  normalizeProxyHost,
+  normalizeStringList,
+  storageGet,
+  storageSet,
+} from './utils.js';
+
 const STORAGE_KEYS = {
   profiles: 'profiles',
   activeProfileId: 'activeProfileId',
@@ -9,30 +17,27 @@ const STORAGE_KEYS = {
 };
 
 const PROTOCOLS = new Set(['auto', 'http', 'https', 'socks']);
+const STATE_LOCK_NAME = 'state';
+const CRYPTO_KEY_LOCK_NAME = 'crypto-key';
+const fallbackLockQueues = new Map();
+let cryptoKeyPromise = null;
 
-function storageGet(keys) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.get(keys, (items) => {
-      const error = chrome.runtime.lastError;
-      if (error) {
-        reject(new Error(error.message));
-        return;
-      }
-      resolve(items);
-    });
-  });
+function restrictLocalStorageAccess() {
+  return chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
 }
 
-function storageSet(items) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set(items, () => {
-      const error = chrome.runtime.lastError;
-      if (error) {
-        reject(new Error(error.message));
-        return;
-      }
-      resolve();
-    });
+function withStorageLock(name, callback) {
+  if (globalThis.navigator?.locks?.request) {
+    return globalThis.navigator.locks.request(`proxy-networks:${name}`, { mode: 'exclusive' }, callback);
+  }
+
+  const previous = fallbackLockQueues.get(name) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(callback);
+  fallbackLockQueues.set(name, current);
+  return current.finally(() => {
+    if (fallbackLockQueues.get(name) === current) {
+      fallbackLockQueues.delete(name);
+    }
   });
 }
 
@@ -75,36 +80,12 @@ function normalizeScheme(scheme, fallback = 'http') {
   return ['http', 'https', 'socks5'].includes(scheme) ? scheme : fallback;
 }
 
-function normalizePort(port) {
-  const numericPort = Number(port);
-  if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
-    return 0;
-  }
-  return numericPort;
-}
-
-function normalizeHost(host) {
-  return typeof host === 'string' ? host.trim() : '';
-}
-
-function normalizeBypassList(items) {
-  if (typeof items === 'string') {
-    return [...new Set(items.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
-  }
-
-  if (!Array.isArray(items)) {
-    return [];
-  }
-
-  return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))];
-}
-
 function normalizeEndpoint(endpoint, fallbackScheme = 'http') {
   if (!endpoint || typeof endpoint !== 'object') {
     return null;
   }
 
-  const host = normalizeHost(endpoint.host);
+  const host = normalizeProxyHost(endpoint.host);
   const port = normalizePort(endpoint.port);
   if (!host || !port) {
     return null;
@@ -130,7 +111,7 @@ function buildAdvancedEndpoints(profile) {
     };
   }
 
-  const host = normalizeHost(profile.host);
+  const host = normalizeProxyHost(profile.host);
   const port = normalizePort(profile.port);
   if (!host || !port) {
     return { proxyForHttp: null, proxyForHttps: null, socks: null };
@@ -149,45 +130,62 @@ function buildAdvancedEndpoints(profile) {
   };
 }
 
-function normalizeStoredProfile(profile) {
-  const advancedEndpoints = buildAdvancedEndpoints(profile);
+export function normalizeProfile(profile) {
+  const source = profile && typeof profile === 'object' && !Array.isArray(profile) ? profile : {};
+  const advancedEndpoints = buildAdvancedEndpoints(source);
 
   return {
-    id: profile.id || '',
-    name: typeof profile.name === 'string' ? profile.name.trim() : '',
+    id: typeof source.id === 'string' ? source.id : '',
+    name: typeof source.name === 'string' ? source.name.trim() : '',
     proxyForHttp: advancedEndpoints.proxyForHttp,
     proxyForHttps: advancedEndpoints.proxyForHttps,
     socks: advancedEndpoints.socks,
-    bypassList: normalizeBypassList(profile.bypassList),
-    bypassRussianResources: profile.bypassRussianResources === true,
-    bypassLocalNetworks: profile.bypassLocalNetworks === true,
-    blockList: normalizeBypassList(profile.blockList),
-    username: typeof profile.username === 'string' ? profile.username.trim() : '',
-    password: typeof profile.password === 'string' ? profile.password : '',
+    bypassList: normalizeStringList(source.bypassList),
+    bypassRussianResources: source.bypassRussianResources === true,
+    bypassLocalNetworks: source.bypassLocalNetworks === true,
+    blockList: normalizeStringList(source.blockList),
+    username: typeof source.username === 'string' ? source.username.trim() : '',
+    password: typeof source.password === 'string' ? source.password : '',
   };
 }
 
 async function getStoredProfiles() {
   const data = await storageGet([STORAGE_KEYS.profiles]);
-  return Array.isArray(data[STORAGE_KEYS.profiles]) ? data[STORAGE_KEYS.profiles] : [];
+  return Array.isArray(data[STORAGE_KEYS.profiles])
+    ? data[STORAGE_KEYS.profiles]
+      .filter((profile) => profile && typeof profile === 'object' && !Array.isArray(profile))
+    : [];
 }
 
-async function getCryptoKey() {
-  const data = await storageGet([STORAGE_KEYS.cryptoKey]);
-  if (data[STORAGE_KEYS.cryptoKey]) {
-    const raw = base64Decode(data[STORAGE_KEYS.cryptoKey]);
-    return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-  }
+async function loadOrCreateCryptoKey() {
+  return withStorageLock(CRYPTO_KEY_LOCK_NAME, async () => {
+    const data = await storageGet([STORAGE_KEYS.cryptoKey]);
+    if (data[STORAGE_KEYS.cryptoKey]) {
+      const raw = base64Decode(data[STORAGE_KEYS.cryptoKey]);
+      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    }
 
-  const key = await crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 },
-    true,
-    ['encrypt', 'decrypt']
-  );
-  const raw = await crypto.subtle.exportKey('raw', key);
-  const base64 = base64Encode(new Uint8Array(raw));
-  await storageSet({ [STORAGE_KEYS.cryptoKey]: base64 });
-  return key;
+    const key = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+    const raw = await crypto.subtle.exportKey('raw', key);
+    await storageSet({
+      [STORAGE_KEYS.cryptoKey]: base64Encode(new Uint8Array(raw)),
+    });
+    return key;
+  });
+}
+
+function getCryptoKey() {
+  if (!cryptoKeyPromise) {
+    cryptoKeyPromise = loadOrCreateCryptoKey().catch((error) => {
+      cryptoKeyPromise = null;
+      throw error;
+    });
+  }
+  return cryptoKeyPromise;
 }
 
 async function encryptPassword(plaintext) {
@@ -216,6 +214,9 @@ async function decryptPassword(b64) {
   try {
     const key = await getCryptoKey();
     const bytes = base64Decode(b64);
+    if (bytes.length <= 12) {
+      throw new Error('Зашифрованный пароль повреждён.');
+    }
     const iv = bytes.slice(0, 12);
     const ciphertext = bytes.slice(12);
     const decrypted = await crypto.subtle.decrypt(
@@ -232,7 +233,7 @@ async function decryptPassword(b64) {
 
 async function decryptStoredProfile(profile) {
   const decryptedPassword = await decryptPassword(profile.password ?? '');
-  return normalizeStoredProfile({
+  return normalizeProfile({
     ...profile,
     password: decryptedPassword,
   });
@@ -240,7 +241,7 @@ async function decryptStoredProfile(profile) {
 
 async function encryptProfileForStorage(profile) {
   const password = await encryptPassword(profile.password ?? '');
-  return normalizeStoredProfile({
+  return normalizeProfile({
     ...profile,
     password,
   });
@@ -249,6 +250,14 @@ async function encryptProfileForStorage(profile) {
 export async function getProfiles() {
   const profiles = await getStoredProfiles();
   return Promise.all(profiles.map((profile) => decryptStoredProfile(profile)));
+}
+
+export async function getProfileSummaries() {
+  const profiles = await getStoredProfiles();
+  return profiles.map((profile) => normalizeProfile({
+    ...profile,
+    password: '',
+  }));
 }
 
 export async function getProfile(id) {
@@ -261,25 +270,52 @@ export async function getProfile(id) {
   return profile ? decryptStoredProfile(profile) : null;
 }
 
-export async function saveProfile(profile) {
-  const profiles = await getStoredProfiles();
-  const prepared = await encryptProfileForStorage(profile);
-  const saved = prepared.id
-    ? prepared
-    : {
-        ...prepared,
-        id: crypto.randomUUID(),
-      };
-
-  const existingIndex = profiles.findIndex((item) => item.id === saved.id);
-  const nextProfiles = [...profiles];
-  if (existingIndex >= 0) {
-    nextProfiles[existingIndex] = saved;
-  } else {
-    nextProfiles.push(saved);
+export async function saveProfiles(profiles) {
+  if (!Array.isArray(profiles)) {
+    throw new TypeError('Профили должны быть массивом.');
   }
-  await storageSet({ [STORAGE_KEYS.profiles]: nextProfiles });
-  return decryptStoredProfile(saved);
+  if (profiles.length === 0) {
+    return [];
+  }
+
+  const preparedProfiles = await Promise.all(profiles.map(async (profile) => {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+      throw new TypeError('Каждый профиль должен быть объектом.');
+    }
+    const prepared = await encryptProfileForStorage(profile);
+    return prepared.id
+      ? prepared
+      : {
+          ...prepared,
+          id: crypto.randomUUID(),
+        };
+  }));
+
+  await withStorageLock(STATE_LOCK_NAME, async () => {
+    const storedProfiles = await getStoredProfiles();
+    const nextProfiles = [...storedProfiles];
+    const indexById = new Map(nextProfiles.map((item, index) => [item.id, index]));
+    for (const prepared of preparedProfiles) {
+      const existingIndex = indexById.get(prepared.id);
+      if (existingIndex === undefined) {
+        indexById.set(prepared.id, nextProfiles.length);
+        nextProfiles.push(prepared);
+      } else {
+        nextProfiles[existingIndex] = prepared;
+      }
+    }
+    await storageSet({ [STORAGE_KEYS.profiles]: nextProfiles });
+  });
+
+  return preparedProfiles.map((prepared, index) => normalizeProfile({
+    ...prepared,
+    password: profiles[index].password,
+  }));
+}
+
+export async function saveProfile(profile) {
+  const [saved] = await saveProfiles([profile]);
+  return saved;
 }
 
 export async function deleteProfile(id) {
@@ -287,16 +323,19 @@ export async function deleteProfile(id) {
     return;
   }
 
-  const data = await storageGet([STORAGE_KEYS.profiles, STORAGE_KEYS.activeProfileId]);
-  const profiles = Array.isArray(data[STORAGE_KEYS.profiles]) ? data[STORAGE_KEYS.profiles] : [];
-  const nextProfiles = profiles.filter((item) => item.id !== id);
-  const updates = { [STORAGE_KEYS.profiles]: nextProfiles };
+  await withStorageLock(STATE_LOCK_NAME, async () => {
+    const data = await storageGet([STORAGE_KEYS.profiles, STORAGE_KEYS.activeProfileId]);
+    const profiles = Array.isArray(data[STORAGE_KEYS.profiles]) ? data[STORAGE_KEYS.profiles] : [];
+    const updates = {
+      [STORAGE_KEYS.profiles]: profiles.filter((item) => item?.id !== id),
+    };
 
-  if (data[STORAGE_KEYS.activeProfileId] === id) {
-    updates[STORAGE_KEYS.activeProfileId] = null;
-  }
+    if (data[STORAGE_KEYS.activeProfileId] === id) {
+      updates[STORAGE_KEYS.activeProfileId] = null;
+    }
 
-  await storageSet(updates);
+    await storageSet(updates);
+  });
 }
 
 export async function getActiveProfileId() {
@@ -304,8 +343,47 @@ export async function getActiveProfileId() {
   return data[STORAGE_KEYS.activeProfileId] ?? null;
 }
 
-export async function setActiveProfileId(id) {
-  await storageSet({ [STORAGE_KEYS.activeProfileId]: id ?? null });
+export async function getProxyState() {
+  const data = await storageGet([
+    STORAGE_KEYS.activeProfileId,
+    STORAGE_KEYS.enabled,
+    STORAGE_KEYS.lastError,
+    STORAGE_KEYS.selectedProtocol,
+  ]);
+  const selectedProtocol = data[STORAGE_KEYS.selectedProtocol];
+  return {
+    activeProfileId: data[STORAGE_KEYS.activeProfileId] ?? null,
+    enabled: Boolean(data[STORAGE_KEYS.enabled]),
+    lastError: data[STORAGE_KEYS.lastError] ?? null,
+    selectedProtocol: PROTOCOLS.has(selectedProtocol) ? selectedProtocol : 'auto',
+  };
+}
+
+export async function setProxyState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    throw new TypeError('Состояние прокси должно быть объектом.');
+  }
+
+  const updates = {};
+  if (Object.hasOwn(state, 'activeProfileId')) {
+    updates[STORAGE_KEYS.activeProfileId] = state.activeProfileId ?? null;
+  }
+  if (Object.hasOwn(state, 'enabled')) {
+    updates[STORAGE_KEYS.enabled] = Boolean(state.enabled);
+  }
+  if (Object.hasOwn(state, 'lastError')) {
+    updates[STORAGE_KEYS.lastError] = state.lastError ?? null;
+  }
+  if (Object.hasOwn(state, 'selectedProtocol')) {
+    updates[STORAGE_KEYS.selectedProtocol] = PROTOCOLS.has(state.selectedProtocol)
+      ? state.selectedProtocol
+      : 'auto';
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return;
+  }
+  await withStorageLock(STATE_LOCK_NAME, () => storageSet(updates));
 }
 
 export async function getEnabled() {
@@ -313,29 +391,14 @@ export async function getEnabled() {
   return Boolean(data[STORAGE_KEYS.enabled]);
 }
 
-export async function setEnabled(value) {
-  await storageSet({ [STORAGE_KEYS.enabled]: Boolean(value) });
-}
-
-export async function getLastError() {
-  const data = await storageGet([STORAGE_KEYS.lastError]);
-  return data[STORAGE_KEYS.lastError] ?? null;
-}
-
 export async function setLastError(msg) {
-  await storageSet({ [STORAGE_KEYS.lastError]: msg ?? null });
+  await setProxyState({ lastError: msg });
 }
 
 export async function getSelectedProtocol() {
   const data = await storageGet([STORAGE_KEYS.selectedProtocol]);
   const protocol = data[STORAGE_KEYS.selectedProtocol];
   return PROTOCOLS.has(protocol) ? protocol : 'auto';
-}
-
-export async function setSelectedProtocol(protocol) {
-  await storageSet({
-    [STORAGE_KEYS.selectedProtocol]: PROTOCOLS.has(protocol) ? protocol : 'auto',
-  });
 }
 
 export async function getContentBlockingSettings() {
@@ -347,25 +410,28 @@ export async function getContentBlockingSettings() {
 }
 
 export async function setContentBlockingSettings(settings) {
-  await storageSet({
+  await withStorageLock(STATE_LOCK_NAME, () => storageSet({
     [STORAGE_KEYS.contentBlocking]: {
       tracking: Boolean(settings?.tracking),
     },
-  });
+  }));
 }
 
 export async function initializeDefaults() {
-  const data = await storageGet(Object.values(STORAGE_KEYS));
-  const defaults = getDefaults();
-  const updates = {};
+  await restrictLocalStorageAccess();
+  await withStorageLock(STATE_LOCK_NAME, async () => {
+    const data = await storageGet(Object.values(STORAGE_KEYS));
+    const defaults = getDefaults();
+    const updates = {};
 
-  for (const key of Object.values(STORAGE_KEYS)) {
-    if (!(key in data)) {
-      updates[key] = defaults[key];
+    for (const key of Object.values(STORAGE_KEYS)) {
+      if (!(key in data)) {
+        updates[key] = defaults[key];
+      }
     }
-  }
 
-  if (Object.keys(updates).length > 0) {
-    await storageSet(updates);
-  }
+    if (Object.keys(updates).length > 0) {
+      await storageSet(updates);
+    }
+  });
 }

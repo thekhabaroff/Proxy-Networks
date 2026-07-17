@@ -19,7 +19,7 @@
 
 body {
   margin: 0;
-  width: 280px;
+  width: 17.5rem;
   height: auto;
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   color: var(--text);
@@ -115,10 +115,6 @@ button {
     box-shadow 140ms ease,
     background-color 140ms ease,
     transform 140ms ease;
-}
-
-select,
-button {
   min-height: 30px;
   padding: 7px 10px;
 }
@@ -208,15 +204,6 @@ select:focus-visible,
 .status,
 .ip {
   color: var(--muted);
-}
-
-.ip {
-  transition: opacity 260ms ease, transform 260ms ease;
-}
-
-.ip.updating {
-  opacity: 0.48;
-  transform: translateY(1px);
 }
 
 .tips {
@@ -314,16 +301,13 @@ select {
 
 .field select {
   min-height: 32px;
+  width: 100%;
 }
 
 .field > span {
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
-}
-
-.field select {
-  width: 100%;
 }
 
 .card label {

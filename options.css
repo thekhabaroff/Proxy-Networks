@@ -39,7 +39,7 @@ textarea {
 
 .layout {
   display: grid;
-  grid-template-columns: 272px 1fr;
+  grid-template-columns: 17rem 1fr;
   min-height: 100vh;
 }
 
@@ -89,16 +89,14 @@ textarea {
 
 .editor-header h2 {
   margin: 0;
+  font-size: 17px;
   letter-spacing: -0.02em;
   font-weight: 600;
 }
 
-.editor-header h2 {
-  font-size: 17px;
-}
-
 .sidebar-header,
-.editor-header {
+.editor-header,
+.field-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -203,7 +201,7 @@ textarea {
 .editor-header,
 .form {
   width: 100%;
-  max-width: 640px;
+  max-width: 40rem;
 }
 
 .form {
@@ -235,15 +233,11 @@ textarea {
 }
 
 .checkbox-field input {
+  width: 16px;
+  height: 16px;
   margin: 0;
+  flex: 0 0 auto;
   accent-color: var(--accent);
-}
-
-.field-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .field-header .check-proxy-button {
@@ -317,6 +311,7 @@ button:active:not(:disabled) {
   filter: brightness(0.9);
 }
 
+.sidebar-link:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -414,6 +409,7 @@ textarea:focus-visible {
 }
 
 
+.panel > .field > label:not(.checkbox-field),
 .panel > .field > span,
 .form > .field > span {
   font-size: 12px;
@@ -481,29 +477,19 @@ textarea::placeholder {
   color: rgba(255, 255, 255, 0.32);
 }
 
-.panel .row {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.panel .row .field {
-  min-width: 0;
-}
-
+.panel .row .field,
 .panel .row input {
   min-width: 0;
 }
 
-@media (max-width: 900px) {
-  .layout {
+@media (max-width: 56.25rem) {
+  .layout,
+  .panel .row {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--separator);
-  }
-
-  .panel .row {
-    grid-template-columns: 1fr;
   }
 }

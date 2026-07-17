@@ -1,6 +1,27 @@
+import {
+  isValidProxyHost,
+  normalizePort,
+  normalizeProxyHost,
+} from './utils.js';
+
 export const PROTOCOLS = Object.freeze(['auto', 'http', 'https', 'socks']);
 
 const PROXY_SCHEMES = new Set(['http', 'https', 'socks5']);
+const PROFILE_ENDPOINT_KEYS = Object.freeze({
+  http: 'proxyForHttp',
+  https: 'proxyForHttps',
+  socks: 'socks',
+});
+
+export function getProfileEndpoint(profile, protocol) {
+  const key = PROFILE_ENDPOINT_KEYS[protocol];
+  return key ? profile?.[key] ?? null : null;
+}
+
+export function getConfiguredProtocols(profile) {
+  return Object.keys(PROFILE_ENDPOINT_KEYS)
+    .filter((protocol) => Boolean(endpointToProxyServer(getProfileEndpoint(profile, protocol))));
+}
 
 function bypassEntryToAscii(entry) {
   if (typeof entry !== 'string') {
@@ -36,22 +57,29 @@ function normalizeBypassListForChrome(bypassList) {
   return [...new Set(bypassList.map(bypassEntryToAscii).filter(Boolean))];
 }
 
+function addBypassList(rules, bypassList) {
+  const normalized = normalizeBypassListForChrome(bypassList);
+  if (normalized.length > 0) {
+    rules.bypassList = normalized;
+  }
+  return rules;
+}
+
 export function endpointToProxyServer(endpoint) {
   if (!endpoint || typeof endpoint.host !== 'string') {
     return null;
   }
 
-  const host = endpoint.host.trim();
-  const port = Number(endpoint.port);
-  if (!host || /\s|\/|:\/\//.test(host) || !PROXY_SCHEMES.has(endpoint.scheme)
-    || !Number.isInteger(port) || port < 1 || port > 65535) {
+  const host = normalizeProxyHost(endpoint.host);
+  const port = normalizePort(endpoint.port);
+  if (!isValidProxyHost(host) || !PROXY_SCHEMES.has(endpoint.scheme) || !port) {
     return null;
   }
 
   return { scheme: endpoint.scheme, host, port };
 }
 
-export function buildProxyConfig(profile) {
+function buildProxyConfig(profile) {
   if (!profile) {
     return { mode: 'direct' };
   }
@@ -64,10 +92,7 @@ export function buildProxyConfig(profile) {
   if (httpProxy) rules.proxyForHttp = httpProxy;
   if (httpsProxy) rules.proxyForHttps = httpsProxy;
   if (socksProxy) rules.fallbackProxy = socksProxy;
-  if (Array.isArray(profile.bypassList) && profile.bypassList.length > 0) {
-    const bypassList = normalizeBypassListForChrome(profile.bypassList);
-    if (bypassList.length > 0) rules.bypassList = bypassList;
-  }
+  addBypassList(rules, profile.bypassList);
 
   return httpProxy || httpsProxy || socksProxy
     ? { mode: 'fixed_servers', rules }
@@ -82,11 +107,7 @@ export function buildSelectedProxyConfig(profile, protocol = 'auto') {
     throw new Error('Неизвестный протокол прокси.');
   }
 
-  const endpoint = protocol === 'http'
-    ? profile?.proxyForHttp
-    : protocol === 'https'
-      ? profile?.proxyForHttps
-      : profile?.socks;
+  const endpoint = getProfileEndpoint(profile, protocol);
   const server = endpointToProxyServer(endpoint);
   if (!server) {
     throw new Error('Для выбранного протокола не настроен прокси.');
@@ -94,9 +115,8 @@ export function buildSelectedProxyConfig(profile, protocol = 'auto') {
 
   return {
     mode: 'fixed_servers',
-    rules: {
+    rules: addBypassList({
       singleProxy: server,
-      bypassList: normalizeBypassListForChrome(profile?.bypassList),
-    },
+    }, profile?.bypassList),
   };
 }

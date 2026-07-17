@@ -1,54 +1,27 @@
+import {
+  errorMessage,
+  normalizeDomain,
+  storageGet,
+  storageSet,
+} from './utils.js';
+
 const GEOSITE_SOURCE = 'https://raw.githubusercontent.com/v2fly/domain-list-community/master/data';
 const GEOSITE_CACHE_KEY = 'geositeCache';
 const GEOSITE_CACHE_VERSION = 2;
 const GEOSITE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const GEOSITE_NAME_PATTERN = /^[a-z0-9][a-z0-9.!_-]*$/i;
 const FETCH_TIMEOUT_MS = 15000;
+const MAX_SOURCE_LENGTH = 10 * 1024 * 1024;
+// Chrome 108–113 allow roughly 5 MB in storage.local. Keep the cache below
+// that limit so profiles and encrypted credentials always have room.
+const MAX_CACHE_BYTES = 4 * 1024 * 1024;
 const inFlightLoads = new Map();
-
-function storageGet(keys) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.get(keys, (items) => {
-      const error = chrome.runtime.lastError;
-      if (error) {
-        reject(new Error(error.message));
-        return;
-      }
-      resolve(items);
-    });
-  });
-}
-
-function storageSet(items) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set(items, () => {
-      const error = chrome.runtime.lastError;
-      if (error) {
-        reject(new Error(error.message));
-        return;
-      }
-      resolve();
-    });
-  });
-}
+let cachePromise = null;
 
 function isFresh(cacheEntry) {
   return cacheEntry?.version === GEOSITE_CACHE_VERSION
     && Boolean(cacheEntry?.updatedAt)
     && Date.now() - cacheEntry.updatedAt < GEOSITE_CACHE_TTL_MS;
-}
-
-function normalizeDomain(domain) {
-  const value = domain.trim().replace(/^\*\./, '').replace(/^\.+/, '').replace(/\.$/, '');
-  if (!value || /\s|\/|:\/\//.test(value)) {
-    return null;
-  }
-
-  try {
-    return new URL(`http://${value}`).hostname;
-  } catch {
-    return null;
-  }
 }
 
 function parseRuleLine(line) {
@@ -113,9 +86,19 @@ async function fetchListText(name) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`Geosite-база «${name}» не найдена (HTTP ${response.status}).`);
+      const error = new Error(`Geosite-база «${name}» не найдена (HTTP ${response.status}).`);
+      error.status = response.status;
+      throw error;
     }
-    return response.text();
+    const contentLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_SOURCE_LENGTH) {
+      throw new Error(`Geosite-база «${name}» превышает допустимый размер.`);
+    }
+    const text = await response.text();
+    if (text.length > MAX_SOURCE_LENGTH) {
+      throw new Error(`Geosite-база «${name}» превышает допустимый размер.`);
+    }
+    return text;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(`Загрузка geosite-базы «${name}» превысила 15 секунд.`);
@@ -127,14 +110,39 @@ async function fetchListText(name) {
 }
 
 async function getCache() {
-  const data = await storageGet([GEOSITE_CACHE_KEY]);
-  return data[GEOSITE_CACHE_KEY] && typeof data[GEOSITE_CACHE_KEY] === 'object'
-    ? data[GEOSITE_CACHE_KEY]
-    : {};
+  if (!cachePromise) {
+    cachePromise = storageGet([GEOSITE_CACHE_KEY])
+      .then((data) => (
+        data[GEOSITE_CACHE_KEY] && typeof data[GEOSITE_CACHE_KEY] === 'object'
+          ? data[GEOSITE_CACHE_KEY]
+          : {}
+      ))
+      .catch((error) => {
+        cachePromise = null;
+        throw error;
+      });
+  }
+  return cachePromise;
 }
 
 async function setCache(cache) {
-  await storageSet({ [GEOSITE_CACHE_KEY]: cache });
+  const encoder = new TextEncoder();
+  const entries = Object.entries(cache && typeof cache === 'object' ? cache : {})
+    .filter(([, entry]) => entry && typeof entry === 'object')
+    .sort(([, left], [, right]) => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0));
+  const prunedCache = {};
+  let estimatedBytes = 2;
+  for (const [name, entry] of entries) {
+    const entryBytes = encoder.encode(`${JSON.stringify(name)}:${JSON.stringify(entry)},`).byteLength;
+    if (estimatedBytes + entryBytes > MAX_CACHE_BYTES) {
+      continue;
+    }
+    prunedCache[name] = entry;
+    estimatedBytes += entryBytes;
+  }
+
+  await storageSet({ [GEOSITE_CACHE_KEY]: prunedCache });
+  cachePromise = Promise.resolve(prunedCache);
 }
 
 async function loadGeosite(name, options = {}) {
@@ -181,7 +189,7 @@ async function loadGeositeInternal(name, {
   try {
     text = await fetchListText(name);
   } catch (error) {
-    if (cached?.domains?.length) {
+    if (!forceRefresh && filters.length === 0 && cached?.domains?.length) {
       return cached.domains;
     }
     throw error;
@@ -205,8 +213,11 @@ async function loadGeositeInternal(name, {
             // Some upstream lists contain selector-style includes such as
             // "name-!cn". They are meaningful to the geosite generator but
             // may not exist as standalone files in the data directory.
-            console.warn(`Не удалось загрузить вложенную geosite-базу «${rule.name}»:`, error);
-            return [];
+            if (error?.status === 404) {
+              console.warn(`Вложенная geosite-база «${rule.name}» отсутствует и будет пропущена.`);
+              return [];
+            }
+            throw error;
           }
         })());
         continue;
@@ -228,7 +239,15 @@ async function loadGeositeInternal(name, {
       }
     }
   }
-  const includedLists = await Promise.all(includeTasks);
+  let includedLists;
+  try {
+    includedLists = await Promise.all(includeTasks);
+  } catch (error) {
+    if (!forceRefresh && filters.length === 0 && cached?.domains?.length) {
+      return cached.domains;
+    }
+    throw error;
+  }
   for (const included of includedLists) {
     included.forEach((domain) => domains.add(domain));
   }
@@ -240,7 +259,6 @@ async function loadGeositeInternal(name, {
       domains: result,
       updatedAt: Date.now(),
     };
-    await setCache(currentCache);
   }
   return result;
 }
@@ -253,22 +271,33 @@ export function geositeNameFromEntry(entry) {
   return match?.[1] ?? null;
 }
 
-export async function resolveGeositeBypassList(bypassList) {
-  if (!Array.isArray(bypassList)) {
+export async function resolveGeositeDomainList(entries) {
+  if (!Array.isArray(entries)) {
     return [];
   }
 
+  for (const entry of entries) {
+    const value = typeof entry === 'string' ? entry.trim() : '';
+    if (/^geosite:/i.test(value) && !geositeNameFromEntry(value)) {
+      throw new Error(`Некорректное имя geosite-базы: ${value.slice('geosite:'.length) || 'пустое имя'}`);
+    }
+  }
+
+  const geositeEntries = entries.filter((entry) => geositeNameFromEntry(entry));
+  if (geositeEntries.length === 0) {
+    return [...new Set(entries)];
+  }
+
   const cache = await getCache();
-  const resolved = [];
-  for (const entry of bypassList) {
+  const resolvedLists = await Promise.all(entries.map(async (entry) => {
     const name = geositeNameFromEntry(entry);
     if (!name) {
-      resolved.push(entry);
-      continue;
+      return [entry];
     }
-    resolved.push(...await loadGeosite(name, { cache }));
-  }
-  return [...new Set(resolved)];
+    return loadGeosite(name, { cache });
+  }));
+  await setCache(cache);
+  return [...new Set(resolvedLists.flat())];
 }
 
 export function geositeNamesFromProfiles(profiles) {
@@ -286,15 +315,27 @@ export function geositeNamesFromProfiles(profiles) {
 
 export async function refreshGeositeCaches(names) {
   const cache = await getCache();
-  const refreshed = [];
-  const failed = [];
-  for (const name of names) {
+  const uniqueNames = [...new Set(Array.isArray(names) ? names : [])];
+  const results = await Promise.all(uniqueNames.map(async (name) => {
     try {
       await loadGeosite(name, { forceRefresh: true, cache });
-      refreshed.push(name);
+      return { name, error: null };
     } catch (error) {
-      failed.push({ name, error: error instanceof Error ? error.message : String(error) });
+      return { name, error: errorMessage(error) };
     }
+  }));
+  const refreshed = [];
+  const failed = [];
+  for (const result of results) {
+    if (result.error === null) {
+      const { name } = result;
+      refreshed.push(name);
+    } else {
+      failed.push(result);
+    }
+  }
+  if (refreshed.length > 0) {
+    await setCache(cache);
   }
   return { refreshed, failed };
 }

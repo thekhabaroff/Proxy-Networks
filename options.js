@@ -3,8 +3,20 @@ import {
   getActiveProfileId,
   getEnabled,
   getProfiles,
+  normalizeProfile,
   saveProfile,
+  saveProfiles,
 } from './storage.js';
+import { geositeNameFromEntry } from './geosite.js';
+import {
+  errorMessage,
+  isValidProxyHost,
+  normalizeDomain,
+  normalizePort,
+  normalizeStringList,
+  sendRuntimeCommand,
+  sendRuntimeMessage,
+} from './utils.js';
 
 const profilesList = document.getElementById('profilesList');
 const newProfileButton = document.getElementById('newProfileButton');
@@ -35,32 +47,22 @@ const importProfilesInput = document.getElementById('importProfilesInput');
 const togglePasswordButton = document.getElementById('togglePasswordButton');
 const clearPasswordButton = document.getElementById('clearPasswordButton');
 
-const ALLOWED_SCHEMES = ['http', 'https', 'socks5'];
+const ALLOWED_SCHEMES = new Set(['http', 'https', 'socks5']);
+const PROXY_URL_PROTOCOLS = new Set(['http:', 'https:', 'socks:', 'socks5:']);
+const PROTOCOL_NAMES = Object.freeze({
+  http: 'HTTP',
+  https: 'HTTPS',
+  socks: 'SOCKS5',
+});
+const PROXY_FIELDS = Object.freeze({
+  http: { scheme: 'http', hostInput: httpHostInput, portInput: httpPortInput },
+  https: { scheme: 'https', hostInput: httpsHostInput, portInput: httpsPortInput },
+  socks: { scheme: 'socks5', hostInput: socksHostInput, portInput: socksPortInput },
+});
 
 let profiles = [];
 let selectedProfileId = null;
 let successTimer = null;
-
-function sendMessage(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      const error = chrome.runtime.lastError;
-      if (error) {
-        reject(new Error(error.message));
-        return;
-      }
-      resolve(response);
-    });
-  });
-}
-
-async function sendCommand(message) {
-  const response = await sendMessage(message);
-  if (!response?.ok) {
-    throw new Error(response?.error || 'Команда расширения завершилась с ошибкой.');
-  }
-  return response;
-}
 
 function showError(message) {
   if (!message) {
@@ -86,14 +88,7 @@ function showSuccess(message) {
   successTimer = setTimeout(() => showSuccess(''), 2200);
 }
 
-function parseBypassList(text) {
-  return [...new Set(text
-    .split(/[\n,]+/)
-    .map((line) => line.trim())
-    .filter(Boolean))];
-}
-
-function formatBypassList(items) {
+function formatStringList(items) {
   return Array.isArray(items) ? items.join('\n') : '';
 }
 
@@ -105,12 +100,19 @@ function parseProxyUrl(value) {
 
   try {
     const url = new URL(trimmed);
+    if (!PROXY_URL_PROTOCOLS.has(url.protocol)
+      || url.username
+      || url.password
+      || (url.pathname && url.pathname !== '/')
+      || url.search
+      || url.hash) {
+      return null;
+    }
     return {
       host: url.hostname,
       port: url.port ? Number(url.port) : 0,
     };
-  } catch (error) {
-    console.warn('Unable to parse proxy URL:', error);
+  } catch {
     return null;
   }
 }
@@ -131,59 +133,15 @@ function endpointFromInputs(scheme, hostInputEl, portInputEl) {
   };
 }
 
-function endpointsFromLegacySingleProxy(profile) {
-  if (profile.proxyForHttp || profile.proxyForHttps || profile.socks) {
-    return {
-      proxyForHttp: profile.proxyForHttp ? { ...profile.proxyForHttp, scheme: 'http' } : null,
-      proxyForHttps: profile.proxyForHttps ? { ...profile.proxyForHttps, scheme: 'https' } : null,
-      socks: profile.socks ? { ...profile.socks, scheme: 'socks5' } : null,
-    };
-  }
-
-  const host = typeof profile.host === 'string' ? profile.host.trim() : '';
-  const port = Number(profile.port);
-  if (!host || !port) {
-    return {
-      proxyForHttp: null,
-      proxyForHttps: null,
-      socks: null,
-    };
-  }
-
-  const scheme = profile.scheme === 'socks4' ? 'socks5'
-    : ALLOWED_SCHEMES.includes(profile.scheme) ? profile.scheme : 'http';
-  const endpoint = { scheme, host, port };
-  if (scheme === 'socks5') {
-    return {
-      proxyForHttp: null,
-      proxyForHttps: null,
-      socks: { ...endpoint, scheme: 'socks5' },
-    };
-  }
-
-  return {
-    proxyForHttp: { ...endpoint, scheme: 'http' },
-    proxyForHttps: { ...endpoint, scheme: 'https' },
-    socks: null,
-  };
-}
-
-function isValidHost(host) {
-  return typeof host === 'string' && Boolean(host.trim()) && !/\s|\/|:\/\//.test(host);
-}
-
-function isValidPort(port) {
-  return Number.isInteger(Number(port)) && Number(port) >= 1 && Number(port) <= 65535;
-}
-
 function renderProfileList() {
-  profilesList.innerHTML = '';
+  profilesList.replaceChildren();
 
   for (const profile of profiles) {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = `profile-item${profile.id === selectedProfileId ? ' active' : ''}`;
     item.textContent = profile.name || profile.id;
+    item.setAttribute('aria-pressed', String(profile.id === selectedProfileId));
     item.addEventListener('click', () => {
       loadProfile(profile.id);
     });
@@ -191,10 +149,25 @@ function renderProfileList() {
   }
 }
 
+function setProxyStatus(status, state = '', details = '') {
+  if (!status) {
+    return;
+  }
+  const statusText = {
+    online: 'доступен',
+    offline: 'недоступен',
+    invalid: 'некорректные параметры',
+    checking: 'проверяется',
+  }[state] ?? 'не проверен';
+  const protocolName = PROTOCOL_NAMES[status.dataset.protocol] ?? 'прокси';
+  status.className = `proxy-status${state ? ` ${state}` : ''}`;
+  status.title = details;
+  status.setAttribute('aria-label', `Статус ${protocolName}: ${statusText}${details ? `. ${details}` : ''}`);
+}
+
 function resetProtocolStatuses() {
   for (const status of document.querySelectorAll('.proxy-status')) {
-    status.className = 'proxy-status';
-    status.title = '';
+    setProxyStatus(status);
   }
 }
 
@@ -208,10 +181,10 @@ function fillForm(profile) {
   httpsPortInput.value = profile?.proxyForHttps?.port ? String(profile.proxyForHttps.port) : '';
   socksHostInput.value = profile?.socks?.host ?? '';
   socksPortInput.value = profile?.socks?.port ? String(profile.socks.port) : '';
-  bypassListInput.value = formatBypassList(profile?.bypassList ?? []);
+  bypassListInput.value = formatStringList(profile?.bypassList ?? []);
   bypassRussianResourcesInput.checked = profile?.bypassRussianResources === true;
   bypassLocalNetworksInput.checked = profile?.bypassLocalNetworks === true;
-  blockListInput.value = formatBypassList(profile?.blockList ?? []);
+  blockListInput.value = formatStringList(profile?.blockList ?? []);
   usernameInput.value = profile?.username ?? '';
   passwordInput.value = profile?.password ?? '';
   passwordInput.type = 'password';
@@ -222,7 +195,7 @@ function fillForm(profile) {
 
 function loadProfile(id) {
   const profile = profiles.find((item) => item.id === id) ?? null;
-  selectedProfileId = id;
+  selectedProfileId = profile?.id ?? null;
   renderProfileList();
   fillForm(profile);
   showError('');
@@ -243,6 +216,9 @@ function validateProfile(data) {
   if (!data || typeof data.name !== 'string' || !data.name.trim()) {
     return 'Введите название профиля.';
   }
+  if (data.name.length > 120) {
+    return 'Название профиля не должно превышать 120 символов.';
+  }
 
   const endpoints = [data.proxyForHttp, data.proxyForHttps, data.socks].filter(Boolean);
   if (endpoints.length === 0) {
@@ -253,13 +229,13 @@ function validateProfile(data) {
     if (typeof endpoint !== 'object') {
       return 'Прокси-эндпоинт имеет некорректный формат.';
     }
-    if (!ALLOWED_SCHEMES.includes(endpoint.scheme)) {
+    if (!ALLOWED_SCHEMES.has(endpoint.scheme)) {
       return 'Выбрана неизвестная схема прокси-эндпоинта.';
     }
-    if (!isValidHost(endpoint.host)) {
+    if (!isValidProxyHost(endpoint.host)) {
       return 'Укажите корректный хост для всех заполненных прокси-эндпоинтов без http://, путей и пробелов.';
     }
-    if (!isValidPort(endpoint.port)) {
+    if (!normalizePort(endpoint.port)) {
       return 'Порт должен быть числом от 1 до 65535.';
     }
   }
@@ -276,6 +252,28 @@ function validateProfile(data) {
     return 'SOCKS прокси должен использовать только socks5.';
   }
 
+  for (const [entries, label] of [
+    [data.bypassList, 'исключениях'],
+    [data.blockList, 'списке блокировки'],
+  ]) {
+    for (const entry of entries) {
+      if (/^geosite:/i.test(entry) && !geositeNameFromEntry(entry)) {
+        return `Некорректная geosite-запись в ${label}: ${entry}`;
+      }
+    }
+  }
+  for (const entry of data.blockList) {
+    if (!geositeNameFromEntry(entry) && !normalizeDomain(entry)) {
+      return `Некорректный домен в списке блокировки: ${entry}`;
+    }
+  }
+  if (data.username.length > 256) {
+    return 'Логин не должен превышать 256 символов.';
+  }
+  if (data.password.length > 1024) {
+    return 'Пароль не должен превышать 1024 символа.';
+  }
+
   return '';
 }
 
@@ -286,10 +284,10 @@ function collectProfile() {
     proxyForHttp: endpointFromInputs('http', httpHostInput, httpPortInput),
     proxyForHttps: endpointFromInputs('https', httpsHostInput, httpsPortInput),
     socks: endpointFromInputs('socks5', socksHostInput, socksPortInput),
-    bypassList: parseBypassList(bypassListInput.value),
+    bypassList: normalizeStringList(bypassListInput.value),
     bypassRussianResources: bypassRussianResourcesInput.checked,
     bypassLocalNetworks: bypassLocalNetworksInput.checked,
-    blockList: parseBypassList(blockListInput.value),
+    blockList: normalizeStringList(blockListInput.value),
     username: usernameInput.value.trim(),
     password: passwordInput.value,
   };
@@ -297,12 +295,11 @@ function collectProfile() {
 
 async function refreshAfterSave(savedProfile) {
   await loadProfiles();
-  await loadProfile(savedProfile.id);
+  loadProfile(savedProfile.id);
   const enabled = await getEnabled();
   if (enabled && savedProfile.id === (await getActiveProfileId())) {
-    await sendCommand({ action: 'applyProfile', profileId: savedProfile.id });
+    await sendRuntimeCommand({ action: 'applyProfile', profileId: savedProfile.id });
   }
-  await sendCommand({ action: 'syncBlockRules' });
 }
 
 profileForm.addEventListener('submit', async (event) => {
@@ -322,7 +319,7 @@ profileForm.addEventListener('submit', async (event) => {
     await refreshAfterSave(savedProfile);
     showSuccess('Профиль сохранён.');
   } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
+    showError(errorMessage(error));
   } finally {
     saveButton.disabled = false;
   }
@@ -350,13 +347,13 @@ deleteButton.addEventListener('click', async () => {
   try {
     const activeProfileId = await getActiveProfileId();
     if (id === activeProfileId && await getEnabled()) {
-      await sendCommand({ action: 'disable' });
+      await sendRuntimeCommand({ action: 'disable' });
     }
     await deleteProfile(id);
     await loadProfiles();
     showSuccess('Профиль удалён.');
   } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
+    showError(errorMessage(error));
   } finally {
     deleteButton.disabled = !profileIdInput.value;
   }
@@ -366,47 +363,41 @@ for (const button of checkProxyButtons) {
   button.addEventListener('click', async () => {
     const protocol = button.dataset.protocol;
     const status = document.querySelector(`.proxy-status[data-protocol="${protocol}"]`);
-    const endpoint = protocol === 'http'
-      ? endpointFromInputs('http', httpHostInput, httpPortInput)
-      : protocol === 'https'
-        ? endpointFromInputs('https', httpsHostInput, httpsPortInput)
-        : endpointFromInputs('socks5', socksHostInput, socksPortInput);
-    if (!endpoint || !isValidHost(endpoint.host) || !isValidPort(endpoint.port)) {
-      status.className = 'proxy-status invalid';
-      status.title = 'Укажите корректные хост и порт.';
+    const fields = PROXY_FIELDS[protocol];
+    const endpoint = fields
+      ? endpointFromInputs(fields.scheme, fields.hostInput, fields.portInput)
+      : null;
+    if (!endpoint || !isValidProxyHost(endpoint.host) || !normalizePort(endpoint.port)) {
+      setProxyStatus(status, 'invalid', 'Укажите корректные хост и порт.');
       return;
     }
     for (const checkButton of checkProxyButtons) checkButton.disabled = true;
-    status.className = 'proxy-status checking';
-    status.title = 'Проверка...';
+    setProxyStatus(status, 'checking', 'Проверка…');
     try {
-      const response = await sendMessage({
+      const response = await sendRuntimeMessage({
         action: 'checkProxyEndpoint',
         endpoint,
         username: usernameInput.value.trim(),
         password: passwordInput.value,
       });
-      status.className = `proxy-status ${response?.ok ? 'online' : 'offline'}`;
-      status.title = response?.error || (response?.ip ? `IP: ${response.ip}` : '');
+      setProxyStatus(
+        status,
+        response?.ok ? 'online' : 'offline',
+        response?.error || (response?.ip ? `IP: ${response.ip}` : ''),
+      );
     } catch (error) {
-      status.className = 'proxy-status offline';
-      status.title = error instanceof Error ? error.message : String(error);
+      setProxyStatus(status, 'offline', errorMessage(error));
     } finally {
       for (const checkButton of checkProxyButtons) checkButton.disabled = false;
     }
   });
 }
 
-for (const [protocol, inputs] of [
-  ['http', [httpHostInput, httpPortInput]],
-  ['https', [httpsHostInput, httpsPortInput]],
-  ['socks', [socksHostInput, socksPortInput]],
-]) {
-  for (const input of inputs) {
+for (const [protocol, fields] of Object.entries(PROXY_FIELDS)) {
+  for (const input of [fields.hostInput, fields.portInput]) {
     input.addEventListener('input', () => {
       const status = document.querySelector(`.proxy-status[data-protocol="${protocol}"]`);
-      status.className = 'proxy-status';
-      status.title = '';
+      setProxyStatus(status);
     });
   }
 }
@@ -445,7 +436,7 @@ exportProfilesButton.addEventListener('click', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 0);
     showSuccess(includePasswords ? 'Профили экспортированы с паролями.' : 'Профили экспортированы без паролей.');
   } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
+    showError(errorMessage(error));
   } finally {
     exportProfilesButton.disabled = false;
   }
@@ -479,12 +470,11 @@ importProfilesInput.addEventListener('change', async () => {
       if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
         throw new Error('Каждый профиль должен быть объектом.');
       }
-      const prepared = {
+      const prepared = normalizeProfile({
         ...profile,
-        ...endpointsFromLegacySingleProxy(profile),
-        id: undefined,
+        id: '',
         name: profile.name ? `${profile.name} (import)` : 'Imported profile',
-      };
+      });
       const validationError = validateProfile(prepared);
       if (validationError) {
         throw new Error(validationError);
@@ -492,16 +482,14 @@ importProfilesInput.addEventListener('change', async () => {
       return prepared;
     });
 
-    for (const profile of preparedProfiles) {
-      await saveProfile(profile);
-    }
+    await saveProfiles(preparedProfiles);
 
     await loadProfiles();
     showError('');
     showSuccess(`Импортировано профилей: ${importedProfiles.length}.`);
   } catch (error) {
     showSuccess('');
-    showError(error instanceof Error ? error.message : String(error));
+    showError(errorMessage(error));
   } finally {
     importProfilesInput.value = '';
     importProfilesButton.disabled = false;
@@ -524,5 +512,9 @@ clearPasswordButton.addEventListener('click', () => {
 try {
   await loadProfiles();
 } catch (error) {
-  showError(error instanceof Error ? error.message : String(error));
+  showError(errorMessage(error));
 }
+
+window.addEventListener('pagehide', () => {
+  clearTimeout(successTimer);
+}, { once: true });

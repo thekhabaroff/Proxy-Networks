@@ -40,10 +40,10 @@
           </select>
         </label>
 
-        <div id="statusLine" class="status hidden"></div>
-        <div id="ipLine" class="ip">Текущий IP: —</div>
-        <div id="pingLine" class="ip hidden">Пинг: —</div>
-        <ul id="tipsList" class="tips hidden"></ul>
+        <div id="statusLine" class="status hidden" role="status" aria-live="polite"></div>
+        <div id="ipLine" class="ip" role="status" aria-live="polite">Текущий IP: —</div>
+        <div id="pingLine" class="ip hidden" role="status" aria-live="polite">Пинг: —</div>
+        <ul id="tipsList" class="tips hidden" aria-label="Советы по диагностике"></ul>
         <button id="refreshIpButton" type="button">Обновить IP</button>
       </section>
 
@@ -54,7 +54,7 @@
         </label>
       </section>
 
-      <section id="errorBanner" class="banner hidden"></section>
+      <section id="errorBanner" class="banner hidden" role="alert" aria-live="assertive"></section>
     </main>
     <script type="module" src="popup.js"></script>
   </body>

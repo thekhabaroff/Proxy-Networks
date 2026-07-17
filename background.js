@@ -2,28 +2,31 @@ import {
   getActiveProfileId,
   getContentBlockingSettings,
   getEnabled,
-  getLastError,
   getProfile,
-  getProfiles,
+  getProfileSummaries,
+  getProxyState,
   getSelectedProtocol,
-  setEnabled,
-  setLastError,
-  setActiveProfileId,
-  setSelectedProtocol,
   initializeDefaults,
+  setLastError,
+  setProxyState,
 } from './storage.js';
 import {
   geositeNamesFromProfiles,
   refreshGeositeCaches,
-  resolveGeositeBypassList,
+  resolveGeositeDomainList,
 } from './geosite.js';
 import { updateBlockRules } from './blocker.js';
 import {
-  buildProxyConfig,
   buildSelectedProxyConfig,
   endpointToProxyServer,
+  getConfiguredProtocols,
+  getProfileEndpoint,
   PROTOCOLS,
 } from './config.js';
+import {
+  errorMessage,
+  normalizeProxyHost,
+} from './utils.js';
 
 const attemptedAuthRequests = new Set();
 const authCleanupTimers = new Map();
@@ -32,6 +35,11 @@ const CHECK_TIMEOUT_MS = 15000;
 const STATIC_RULESET_IDS = Object.freeze({
   tracking: ['trackers_rules'],
 });
+const CONTROLLABLE_PROXY_LEVELS = new Set([
+  'controllable_by_this_extension',
+  'controlled_by_this_extension',
+]);
+const PROXY_CONTROL_ERROR = 'Настройки прокси контролируются политикой Chrome или другим расширением.';
 let endpointCheckInProgress = false;
 let proxyHealthCheckInProgress = false;
 let endpointTestAuth = null;
@@ -39,14 +47,30 @@ let pendingProfileAuth = null;
 let ignoreProxyErrorsUntil = 0;
 let russianBypassListPromise = null;
 let localBypassListPromise = null;
+let proxyOperationQueue = Promise.resolve();
+let pendingProxyOperations = 0;
+let proxyHealthCheckQueued = false;
+
+function withProxyOperation(callback) {
+  pendingProxyOperations += 1;
+  const operation = proxyOperationQueue.then(callback);
+  proxyOperationQueue = operation.catch(() => undefined);
+  return operation.finally(() => {
+    pendingProxyOperations = Math.max(0, pendingProxyOperations - 1);
+  });
+}
+
+async function fetchPackagedJson(path) {
+  const response = await fetch(chrome.runtime.getURL(path), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Не удалось загрузить ${path} (HTTP ${response.status}).`);
+  }
+  return response.json();
+}
 
 async function getRussianBypassList() {
   if (!russianBypassListPromise) {
-    russianBypassListPromise = fetch(chrome.runtime.getURL('rules/ru.json'), { cache: 'no-store' })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Не удалось загрузить rules/ru.json (HTTP ${response.status}).`);
-        return response.json();
-      })
+    russianBypassListPromise = fetchPackagedJson('rules/ru.json')
       .then((rules) => [...new Set((Array.isArray(rules) ? rules : [])
         .map((rule) => rule?.condition?.urlFilter)
         .filter((filter) => typeof filter === 'string')
@@ -54,28 +78,34 @@ async function getRussianBypassList() {
         .filter(Boolean)
         .flatMap((domain) => [domain, `*.${domain}`]))]);
   }
-  return russianBypassListPromise;
+  try {
+    return await russianBypassListPromise;
+  } catch (error) {
+    russianBypassListPromise = null;
+    throw error;
+  }
 }
 
 async function getLocalBypassList() {
   if (!localBypassListPromise) {
-    localBypassListPromise = fetch(chrome.runtime.getURL('rules/local.json'), { cache: 'no-store' })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Не удалось загрузить rules/local.json (HTTP ${response.status}).`);
-        return response.json();
-      })
+    localBypassListPromise = fetchPackagedJson('rules/local.json')
       .then((rules) => [...new Set((Array.isArray(rules) ? rules : [])
         .filter((entry) => typeof entry === 'string' && entry.trim())
         .map((entry) => entry.trim()))]);
   }
-  return localBypassListPromise;
+  try {
+    return await localBypassListPromise;
+  } catch (error) {
+    localBypassListPromise = null;
+    throw error;
+  }
 }
 
 async function profileWithResolvedBypassList(profile) {
   if (!profile || !Array.isArray(profile.bypassList)) {
     return profile;
   }
-  const bypassList = await resolveGeositeBypassList(profile.bypassList);
+  const bypassList = await resolveGeositeDomainList(profile.bypassList);
   if (profile.bypassRussianResources) {
     bypassList.push(...await getRussianBypassList());
   }
@@ -88,12 +118,11 @@ async function profileWithResolvedBypassList(profile) {
   };
 }
 
-async function syncContentBlockingRules(profileOverride = null, profileEnabledOverride = null) {
-  // Remove old rules first so geosite sources cannot be blocked by a stale
-  // ruleset while the new lists are being resolved.
-  await updateBlockRules([]);
+async function syncContentBlockingRules(profileOverride = undefined, profileEnabledOverride = null) {
   const activeProfileId = await getActiveProfileId();
-  const activeProfile = profileOverride || (activeProfileId ? await getProfile(activeProfileId) : null);
+  const activeProfile = profileOverride === undefined
+    ? (activeProfileId ? await getProfile(activeProfileId) : null)
+    : profileOverride;
   const settings = await getContentBlockingSettings();
   const profileEnabled = profileEnabledOverride ?? await getEnabled();
   const enabledRulesets = await chrome.declarativeNetRequest.getEnabledRulesets();
@@ -101,37 +130,34 @@ async function syncContentBlockingRules(profileOverride = null, profileEnabledOv
     .filter(([setting]) => settings[setting])
     .flatMap(([, rulesetIds]) => rulesetIds);
   const desiredSet = new Set(desiredRulesets);
-  await chrome.declarativeNetRequest.updateEnabledRulesets({
-    enableRulesetIds: desiredRulesets.filter((id) => !enabledRulesets.includes(id)),
-    disableRulesetIds: Object.values(STATIC_RULESET_IDS).flat()
-      .filter((id) => enabledRulesets.includes(id) && !desiredSet.has(id)),
-  });
-  return updateBlockRules(profileEnabled ? activeProfile?.blockList ?? [] : [], settings);
+  const enableRulesetIds = desiredRulesets.filter((id) => !enabledRulesets.includes(id));
+  const disableRulesetIds = Object.values(STATIC_RULESET_IDS).flat()
+    .filter((id) => enabledRulesets.includes(id) && !desiredSet.has(id));
+  if (enableRulesetIds.length > 0 || disableRulesetIds.length > 0) {
+    await chrome.declarativeNetRequest.updateEnabledRulesets({
+      enableRulesetIds,
+      disableRulesetIds,
+    });
+  }
+  return updateBlockRules(profileEnabled ? activeProfile?.blockList ?? [] : []);
 }
 
-function normalizeProxyHost(host) {
-  return String(host ?? '')
-    .trim()
-    .replace(/^\[|\]$/g, '')
+function canonicalProxyHost(host) {
+  return normalizeProxyHost(String(host ?? ''))
     .replace(/\.$/, '')
     .toLowerCase();
 }
 
 function proxyServersForProfile(profile, protocol = 'auto') {
-  const endpoints = {
-    http: profile?.proxyForHttp,
-    https: profile?.proxyForHttps,
-    socks: profile?.socks,
-  };
-
   if (protocol !== 'auto') {
-    const selectedServer = endpointToProxyServer(endpoints[protocol]);
+    const selectedServer = endpointToProxyServer(getProfileEndpoint(profile, protocol));
     if (selectedServer) {
       return [selectedServer];
     }
   }
 
-  return Object.values(endpoints).map(endpointToProxyServer).filter(Boolean);
+  return getConfiguredProtocols(profile)
+    .map((configuredProtocol) => endpointToProxyServer(getProfileEndpoint(profile, configuredProtocol)));
 }
 
 function authScopeForProfile(profile, protocol = 'auto') {
@@ -146,10 +172,10 @@ function isExpectedProxyChallenger(challenger, servers) {
     return false;
   }
 
-  const host = normalizeProxyHost(challenger.host);
+  const host = canonicalProxyHost(challenger.host);
   const port = Number(challenger.port);
   return servers.some((server) => (
-    normalizeProxyHost(server.host) === host && Number(server.port) === port
+    canonicalProxyHost(server.host) === host && Number(server.port) === port
   ));
 }
 
@@ -187,17 +213,70 @@ function proxySet(value, scope) {
   });
 }
 
+function proxyClear(scope) {
+  return new Promise((resolve, reject) => {
+    chrome.proxy.settings.clear({ scope }, () => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function proxyGet() {
+  return new Promise((resolve, reject) => {
+    chrome.proxy.settings.get({}, (details) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve({
+        levelOfControl: details?.levelOfControl ?? 'not_controllable',
+        value: details?.value ?? { mode: 'system' },
+      });
+    });
+  });
+}
+
+function assertProxyControllable(proxySetting) {
+  if (!CONTROLLABLE_PROXY_LEVELS.has(proxySetting?.levelOfControl)) {
+    throw new Error(PROXY_CONTROL_ERROR);
+  }
+}
+
+async function restoreProxySetting(proxySetting) {
+  if (proxySetting?.levelOfControl === 'controlled_by_this_extension') {
+    await proxySet(proxySetting.value, 'regular');
+    return;
+  }
+  await proxyClear('regular');
+}
+
+async function getEffectiveProxyState() {
+  const state = await getProxyState();
+  if (!state.enabled) {
+    return { ...state, proxyControlled: true };
+  }
+  const proxySetting = await proxyGet();
+  const proxyControlled = proxySetting.levelOfControl === 'controlled_by_this_extension';
+  return {
+    ...state,
+    lastError: proxyControlled ? state.lastError : PROXY_CONTROL_ERROR,
+    proxyControlled,
+  };
+}
+
 async function applyProfile(profile, protocol = 'auto') {
   if (!PROTOCOLS.includes(protocol)) {
     throw new Error('Неизвестный протокол прокси.');
   }
   let resolvedProtocol = protocol;
   if (protocol !== 'auto') {
-    const endpoint = protocol === 'http'
-      ? profile?.proxyForHttp
-      : protocol === 'https'
-        ? profile?.proxyForHttps
-        : profile?.socks;
+    const endpoint = getProfileEndpoint(profile, protocol);
     if (!endpointToProxyServer(endpoint)) resolvedProtocol = 'auto';
   }
   const resolvedProfile = await profileWithResolvedBypassList(profile);
@@ -206,18 +285,90 @@ async function applyProfile(profile, protocol = 'auto') {
     throw new Error('В профиле не настроен ни один прокси.');
   }
   await proxySet(config, 'regular');
-  await setSelectedProtocol(resolvedProtocol);
-  await setLastError(null);
-  return config;
+  return { config, resolvedProtocol };
 }
 
 async function disableAll() {
+  await proxyClear('regular');
+  await setProxyState({ enabled: false, lastError: null });
+  await syncContentBlockingRules(null, false);
+}
+
+async function rollbackFailedEnable() {
+  const rollbackErrors = [];
   try {
-    await proxySet({ mode: 'direct' }, 'regular');
+    await proxyClear('regular');
+  } catch (error) {
+    rollbackErrors.push(error);
+  }
+  try {
+    await setProxyState({ enabled: false, lastError: null });
+  } catch (error) {
+    rollbackErrors.push(error);
+  }
+  try {
+    await syncContentBlockingRules(null, false);
+  } catch (error) {
+    rollbackErrors.push(error);
+  }
+  if (rollbackErrors.length > 0) {
+    console.error('Unable to fully roll back failed proxy activation:', rollbackErrors);
+  }
+}
+
+async function activateProfile(profile, profileId, protocol) {
+  const previousState = await getProxyState();
+  const previousProfile = previousState.activeProfileId
+    ? await getProfile(previousState.activeProfileId)
+    : null;
+  const previousProxySetting = await proxyGet();
+  assertProxyControllable(previousProxySetting);
+  pendingProfileAuth = authScopeForProfile(profile, protocol);
+  try {
+    await syncContentBlockingRules(profile, true);
+    const { resolvedProtocol } = await applyProfile(profile, protocol);
+    await setProxyState({
+      activeProfileId: profileId,
+      enabled: true,
+      lastError: null,
+      selectedProtocol: resolvedProtocol,
+    });
+  } catch (error) {
+    if (previousState.enabled
+      && previousProfile
+      && previousProxySetting.levelOfControl === 'controlled_by_this_extension') {
+      const rollbackErrors = [];
+      let proxyRestored = false;
+      pendingProfileAuth = authScopeForProfile(previousProfile, previousState.selectedProtocol);
+      try {
+        await restoreProxySetting(previousProxySetting);
+        proxyRestored = true;
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+      try {
+        await syncContentBlockingRules(previousProfile, true);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+      if (proxyRestored) {
+        try {
+          await setProxyState(previousState);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      } else {
+        await rollbackFailedEnable();
+      }
+      if (rollbackErrors.length > 0) {
+        console.error('Unable to fully restore the previous proxy profile:', rollbackErrors);
+      }
+    } else {
+      await rollbackFailedEnable();
+    }
+    throw error;
   } finally {
-    await setEnabled(false);
-    await setLastError(null);
-    await syncContentBlockingRules();
+    pendingProfileAuth = null;
   }
 }
 
@@ -233,23 +384,16 @@ async function enableActiveProfile(protocol = null) {
   }
 
   const selectedProtocol = protocol ?? await getSelectedProtocol();
-  pendingProfileAuth = authScopeForProfile(profile, selectedProtocol);
-  try {
-    await syncContentBlockingRules(profile, true);
-    await applyProfile(profile, selectedProtocol);
-    await setEnabled(true);
-  } finally {
-    pendingProfileAuth = null;
-  }
+  await activateProfile(profile, activeProfileId, selectedProtocol);
   return profile;
 }
 
 async function getStatus() {
-  const enabled = await getEnabled();
-  const activeProfileId = await getActiveProfileId();
-  const activeProfile = activeProfileId ? await getProfile(activeProfileId) : null;
-  const lastError = await getLastError();
-  const selectedProtocol = await getSelectedProtocol();
+  const state = await getEffectiveProxyState();
+  const { activeProfileId, enabled, lastError, selectedProtocol } = state;
+  const activeProfile = activeProfileId
+    ? (await getProfileSummaries()).find((profile) => profile.id === activeProfileId) ?? null
+    : null;
   return {
     enabled,
     activeProfileId,
@@ -260,8 +404,7 @@ async function getStatus() {
 }
 
 async function updateActionIcon() {
-  const enabled = await getEnabled();
-  const lastError = await getLastError();
+  const { enabled, lastError } = await getEffectiveProxyState();
   const color = !enabled ? 'gray' : lastError ? 'red' : 'green';
   try {
     await chrome.action.setIcon({
@@ -275,6 +418,12 @@ async function updateActionIcon() {
     console.error('Unable to update extension icon:', error);
   }
 }
+
+chrome.proxy.settings.onChange.addListener(() => {
+  void updateActionIcon().catch((error) => {
+    console.error('Unable to update the icon after a proxy ownership change:', error);
+  });
+});
 
 async function fetchExternalIp() {
   const controller = new AbortController();
@@ -299,16 +448,16 @@ async function fetchExternalIp() {
   }
 }
 
-async function fetchExternalIpWithPing() {
+async function fetchExternalIpWithLatency() {
   const startedAt = performance.now();
   const ip = await fetchExternalIp();
   return {
     ip,
-    ping: Math.max(1, Math.round(performance.now() - startedAt)),
+    latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
   };
 }
 
-chrome.proxy.onProxyError.addListener(async (details) => {
+async function handleProxyError(details) {
   if (endpointCheckInProgress
     || proxyHealthCheckInProgress
     || Date.now() < ignoreProxyErrorsUntil
@@ -323,15 +472,28 @@ chrome.proxy.onProxyError.addListener(async (details) => {
   try {
     // One failed socket does not necessarily mean that the configured proxy
     // is unavailable. Confirm it with a separate request before showing red.
-    await setLastError(null);
-    await updateActionIcon();
     await fetchExternalIp();
+    await setLastError(null);
   } catch {
     await setLastError(`${message}${suffix}`);
   } finally {
     proxyHealthCheckInProgress = false;
     await updateActionIcon();
   }
+}
+
+chrome.proxy.onProxyError.addListener((details) => {
+  if (proxyHealthCheckQueued) {
+    return;
+  }
+  proxyHealthCheckQueued = true;
+  void withProxyOperation(() => handleProxyError(details))
+    .catch((error) => {
+      console.error('Unable to process proxy error:', error);
+    })
+    .finally(() => {
+      proxyHealthCheckQueued = false;
+    });
 });
 
 chrome.webRequest.onAuthRequired.addListener(
@@ -377,16 +539,6 @@ chrome.webRequest.onAuthRequired.addListener(
   ['asyncBlocking']
 );
 
-chrome.webRequest.onCompleted.addListener(
-  (details) => clearAuthAttempt(details.requestId),
-  { urls: ['<all_urls>'] }
-);
-
-chrome.webRequest.onErrorOccurred.addListener(
-  (details) => clearAuthAttempt(details.requestId),
-  { urls: ['<all_urls>'] }
-);
-
 async function testProxyEndpoint(endpoint, credentials) {
   const server = endpointToProxyServer(endpoint);
   if (!server) {
@@ -405,35 +557,25 @@ async function testProxyEndpoint(endpoint, credentials) {
     servers: [server],
   };
 
-  let previousConfig = { mode: 'direct' };
+  let previousProxySetting = null;
   let result;
   try {
-    const enabled = await getEnabled();
-    const activeProfileId = await getActiveProfileId();
-    const activeProfile = activeProfileId ? await getProfile(activeProfileId) : null;
-    const protocol = await getSelectedProtocol();
-    if (enabled && activeProfile) {
-      try {
-        const resolvedProfile = await profileWithResolvedBypassList(activeProfile);
-        previousConfig = buildSelectedProxyConfig(resolvedProfile, protocol);
-      } catch {
-        const resolvedProfile = await profileWithResolvedBypassList(activeProfile);
-        previousConfig = buildProxyConfig(resolvedProfile);
-      }
-    }
-
+    previousProxySetting = await proxyGet();
+    assertProxyControllable(previousProxySetting);
     await proxySet({ mode: 'fixed_servers', rules: { singleProxy: server } }, 'regular');
     result = { ok: true, ip: await fetchExternalIp() };
   } catch (error) {
-    result = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    result = { ok: false, error: errorMessage(error) };
   } finally {
-    try {
-      await proxySet(previousConfig, 'regular');
-    } catch (error) {
-      result = {
-        ok: false,
-        error: `Не удалось восстановить настройки прокси: ${error instanceof Error ? error.message : String(error)}`,
-      };
+    if (previousProxySetting) {
+      try {
+        await restoreProxySetting(previousProxySetting);
+      } catch (error) {
+        result = {
+          ok: false,
+          error: `Не удалось восстановить настройки прокси: ${errorMessage(error)}`,
+        };
+      }
     }
     endpointTestAuth = null;
     ignoreProxyErrorsUntil = Date.now() + 1500;
@@ -449,16 +591,24 @@ async function restoreStoredState() {
     if (await getEnabled()) {
       await enableActiveProfile();
     } else {
+      await proxyClear('regular');
       await syncContentBlockingRules();
     }
   } catch (error) {
     try {
-      await proxySet({ mode: 'direct' }, 'regular');
+      await proxyClear('regular');
     } catch (proxyError) {
       console.error('Unable to reset proxy settings:', proxyError);
     }
-    await setLastError(error instanceof Error ? error.message : String(error));
-    await setEnabled(false);
+    await setProxyState({
+      enabled: false,
+      lastError: errorMessage(error),
+    });
+    try {
+      await syncContentBlockingRules(null, false);
+    } catch (rulesError) {
+      console.error('Unable to clear profile block rules:', rulesError);
+    }
   } finally {
     await updateActionIcon();
   }
@@ -475,12 +625,12 @@ async function scheduleGeositeRefresh() {
   });
 }
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
+async function handleGeositeAlarm(alarm) {
   if (alarm.name !== 'geosite-daily-refresh') {
     return;
   }
 
-  const profiles = await getProfiles();
+  const profiles = await getProfileSummaries();
   const result = await refreshGeositeCaches(geositeNamesFromProfiles(profiles));
   if (result.failed.length) {
     console.warn('Unable to refresh geosite bases:', result.failed);
@@ -490,22 +640,35 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await enableActiveProfile(await getSelectedProtocol());
       await updateActionIcon();
     } catch (error) {
-      await setLastError(error instanceof Error ? error.message : String(error));
+      console.warn('Unable to reapply the active profile after geosite refresh:', error);
       await updateActionIcon();
     }
   } else {
     await syncContentBlockingRules();
   }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  void withProxyOperation(() => handleGeositeAlarm(alarm)).catch((error) => {
+    console.error('Unable to handle geosite refresh alarm:', error);
+  });
 });
 
-chrome.runtime.onStartup.addListener(async () => {
+async function initializeWorkerState() {
   await scheduleGeositeRefresh();
   await restoreStoredState();
+}
+
+chrome.runtime.onStartup.addListener(() => {
+  void withProxyOperation(initializeWorkerState).catch((error) => {
+    console.error('Unable to restore extension state on startup:', error);
+  });
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
-  await scheduleGeositeRefresh();
-  await restoreStoredState();
+chrome.runtime.onInstalled.addListener(() => {
+  void withProxyOperation(initializeWorkerState).catch((error) => {
+    console.error('Unable to initialize extension state:', error);
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -515,104 +678,92 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     if (message.action === 'enable') {
-      if (endpointCheckInProgress) throw new Error('Дождитесь завершения проверки прокси.');
-      const targetProfileId = message.profileId || await getActiveProfileId();
-      const profile = await getProfile(targetProfileId);
-      if (!profile) throw new Error('Выбранный профиль не найден.');
-      const selectedProtocol = message.protocol ?? await getSelectedProtocol();
-      pendingProfileAuth = authScopeForProfile(profile, selectedProtocol);
-      try {
-        await syncContentBlockingRules(profile, true);
-        await applyProfile(profile, selectedProtocol);
-        await setActiveProfileId(targetProfileId);
-        await setEnabled(true);
-      } finally {
-        pendingProfileAuth = null;
-      }
+      const profile = await withProxyOperation(async () => {
+        const targetProfileId = message.profileId || await getActiveProfileId();
+        const selectedProfile = await getProfile(targetProfileId);
+        if (!selectedProfile) throw new Error('Выбранный профиль не найден.');
+        const selectedProtocol = message.protocol ?? await getSelectedProtocol();
+        await activateProfile(selectedProfile, targetProfileId, selectedProtocol);
+        return selectedProfile;
+      });
       await updateActionIcon();
       sendResponse({ ok: true, profile });
       return;
     }
 
     if (message.action === 'disable') {
-      if (endpointCheckInProgress) throw new Error('Дождитесь завершения проверки прокси.');
-      await disableAll();
+      await withProxyOperation(disableAll);
       await updateActionIcon();
       sendResponse({ ok: true });
       return;
     }
 
     if (message.action === 'applyProfile') {
-      if (endpointCheckInProgress) throw new Error('Дождитесь завершения проверки прокси.');
-      if (Object.hasOwn(message, 'profileId') && !message.profileId) {
-        if (await getEnabled()) await disableAll();
-        await setActiveProfileId(null);
-        await setSelectedProtocol('auto');
-        await updateActionIcon();
-        sendResponse({ ok: true, profile: null });
-        return;
-      }
-      const protocol = message.protocol ?? await getSelectedProtocol();
-      const enabled = await getEnabled();
-      const targetProfileId = message.profileId || await getActiveProfileId();
-      const profile = targetProfileId ? await getProfile(targetProfileId) : null;
-      if (!profile) throw new Error('Выбранный профиль не найден.');
-      if (enabled) {
-        pendingProfileAuth = authScopeForProfile(profile, protocol);
-        try {
-          await syncContentBlockingRules(profile);
-          await applyProfile(profile, protocol);
-          await setActiveProfileId(targetProfileId);
-        } finally {
-          pendingProfileAuth = null;
+      const profile = await withProxyOperation(async () => {
+        if (Object.hasOwn(message, 'profileId') && !message.profileId) {
+          if (await getEnabled()) await disableAll();
+          await setProxyState({ activeProfileId: null, selectedProtocol: 'auto' });
+          return null;
         }
-        await updateActionIcon();
-        sendResponse({ ok: true, profile });
-        return;
-      }
+        const protocol = message.protocol ?? await getSelectedProtocol();
+        const enabled = await getEnabled();
+        const targetProfileId = message.profileId || await getActiveProfileId();
+        const selectedProfile = targetProfileId ? await getProfile(targetProfileId) : null;
+        if (!selectedProfile) throw new Error('Выбранный профиль не найден.');
+        if (enabled) {
+          await activateProfile(selectedProfile, targetProfileId, protocol);
+          return selectedProfile;
+        }
 
-      await setActiveProfileId(targetProfileId);
-      await setSelectedProtocol(protocol);
-      await syncContentBlockingRules(profile);
+        await setProxyState({
+          activeProfileId: targetProfileId,
+          selectedProtocol: protocol,
+        });
+        await syncContentBlockingRules(selectedProfile, false);
+        return selectedProfile;
+      });
+      await updateActionIcon();
       sendResponse({ ok: true, profile });
       return;
     }
 
     if (message.action === 'getStatus') {
-      sendResponse(await getStatus());
+      sendResponse({ ok: true, ...await getStatus() });
       return;
     }
 
     if (message.action === 'syncBlockRules') {
-      const count = await syncContentBlockingRules();
+      const count = await withProxyOperation(syncContentBlockingRules);
       sendResponse({ ok: true, count });
       return;
     }
 
     if (message.action === 'checkProxy') {
-      if (endpointCheckInProgress) {
+      if (endpointCheckInProgress || pendingProxyOperations > 0) {
         sendResponse({
           ok: false,
           busy: true,
-          error: 'Выполняется проверка другого прокси.',
+          error: 'Выполняется изменение настроек прокси.',
           tips: [],
         });
         return;
       }
       try {
-        const result = await fetchExternalIpWithPing();
+        const state = await getEffectiveProxyState();
+        if (state.enabled && !state.proxyControlled) {
+          throw new Error(PROXY_CONTROL_ERROR);
+        }
+        const result = await fetchExternalIpWithLatency();
         if (await getEnabled()) await setLastError(null);
         await updateActionIcon();
-        const status = await getStatus();
         sendResponse({
           ok: true,
           ip: result.ip,
-          ping: result.ping,
-          status,
+          ping: result.latencyMs,
           tips: [],
         });
       } catch (error) {
-        const messageText = error instanceof Error ? error.message : String(error);
+        const messageText = errorMessage(error);
         if (await getEnabled()) await setLastError(messageText);
         await updateActionIcon();
         sendResponse({
@@ -629,19 +780,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.action === 'checkProxyEndpoint') {
-      sendResponse(await testProxyEndpoint(message.endpoint, {
+      sendResponse(await withProxyOperation(() => testProxyEndpoint(message.endpoint, {
         username: message.username,
         password: message.password,
-      }));
+      })));
       return;
     }
 
     sendResponse({ ok: false, error: 'Неизвестное действие' });
   })().catch(async (error) => {
-    const messageText = error instanceof Error ? error.message : String(error);
-    if (await getEnabled()) {
-      await setLastError(messageText);
+    const messageText = errorMessage(error);
+    try {
       await updateActionIcon();
+    } catch (reportError) {
+      console.error('Unable to refresh the action icon after a command error:', reportError);
     }
     sendResponse({ ok: false, error: messageText });
   });

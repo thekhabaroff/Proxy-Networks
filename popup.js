@@ -1,9 +1,14 @@
 import {
   getContentBlockingSettings,
-  getProfiles,
-  getActiveProfileId,
+  getProfileSummaries,
   setContentBlockingSettings,
 } from './storage.js';
+import {
+  errorMessage,
+  sendRuntimeCommand,
+  sendRuntimeMessage,
+} from './utils.js';
+import { getConfiguredProtocols } from './config.js';
 
 const enabledToggle = document.getElementById('enabledToggle');
 const profileSelect = document.getElementById('profileSelect');
@@ -24,36 +29,16 @@ let currentEnabled = false;
 let currentActiveProfileId = null;
 let currentProtocol = 'auto';
 let refreshInProgress = false;
-
-function sendMessage(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      const error = chrome.runtime.lastError;
-      if (error) {
-        reject(new Error(error.message));
-        return;
-      }
-      resolve(response);
-    });
-  });
-}
-
-async function sendCommand(message) {
-  const response = await sendMessage(message);
-  if (!response?.ok) {
-    throw new Error(response?.error || 'Команда расширения завершилась с ошибкой.');
-  }
-  return response;
-}
+let refreshTimerId = null;
 
 async function loadStatus() {
-  await sendMessage({ action: 'syncBlockRules' });
   const blockingSettings = await getContentBlockingSettings();
   blockTrackingInput.checked = blockingSettings.tracking;
-  const response = await sendMessage({ action: 'getStatus' });
+  const response = await sendRuntimeCommand({ action: 'getStatus' });
   currentEnabled = Boolean(response?.enabled);
   currentActiveProfileId = response?.activeProfileId ?? null;
   currentProtocol = response?.selectedProtocol ?? 'auto';
+  renderProfiles();
   enabledToggle.checked = currentEnabled;
   pingLine.classList.toggle('hidden', !currentEnabled);
   protocolField.classList.toggle('hidden', !currentActiveProfileId);
@@ -64,7 +49,7 @@ async function loadStatus() {
   protocolSelect.value = currentProtocol;
   if (updateProtocolOptions()) {
     currentProtocol = 'auto';
-    await sendCommand({
+    await sendRuntimeCommand({
       action: 'applyProfile',
       profileId: currentActiveProfileId,
       protocol: 'auto',
@@ -83,21 +68,30 @@ async function loadStatus() {
 
 async function saveContentBlockingSettings() {
   blockTrackingInput.disabled = true;
+  let previousSettings = { tracking: !blockTrackingInput.checked };
   try {
+    previousSettings = await getContentBlockingSettings();
     await setContentBlockingSettings({
       tracking: blockTrackingInput.checked,
     });
-    await sendCommand({ action: 'syncBlockRules' });
+    await sendRuntimeCommand({ action: 'syncBlockRules' });
     showPopupError('');
   } catch (error) {
-    showPopupError(error instanceof Error ? error.message : String(error));
+    blockTrackingInput.checked = previousSettings.tracking;
+    try {
+      await setContentBlockingSettings(previousSettings);
+      await sendRuntimeCommand({ action: 'syncBlockRules' });
+    } catch (rollbackError) {
+      console.error('Unable to roll back content blocking settings:', rollbackError);
+    }
+    showPopupError(errorMessage(error));
   } finally {
     blockTrackingInput.disabled = false;
   }
 }
 
 function renderProfiles() {
-  profileSelect.innerHTML = '';
+  profileSelect.replaceChildren();
 
   const emptyOption = document.createElement('option');
   emptyOption.value = '';
@@ -116,12 +110,7 @@ function renderProfiles() {
 
 function updateProtocolOptions() {
   const activeProfile = profilesCache.find((profile) => profile.id === currentActiveProfileId);
-  const availableProtocols = [
-    ['http', activeProfile?.proxyForHttp],
-    ['https', activeProfile?.proxyForHttps],
-    ['socks', activeProfile?.socks],
-  ].filter(([, endpoint]) => endpoint?.host && endpoint?.port)
-    .map(([protocol]) => protocol);
+  const availableProtocols = getConfiguredProtocols(activeProfile);
 
   [...protocolSelect.options].forEach((option) => {
     option.hidden = option.value !== 'auto' && !availableProtocols.includes(option.value);
@@ -134,8 +123,7 @@ function updateProtocolOptions() {
 }
 
 async function loadProfiles() {
-  profilesCache = await getProfiles();
-  currentActiveProfileId = await getActiveProfileId();
+  profilesCache = await getProfileSummaries();
   renderProfiles();
   updateProtocolOptions();
 }
@@ -146,21 +134,27 @@ function showPopupError(message) {
 }
 
 function updateLiveText(element, text) {
-  element.classList.add('updating');
+  if (element.textContent === text) {
+    return;
+  }
   element.textContent = text;
-  requestAnimationFrame(() => {
-    element.classList.remove('updating');
-  });
+  if (typeof element.animate === 'function') {
+    element.animate([
+      { opacity: 0.62, transform: 'translateY(1px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], {
+      duration: 260,
+      easing: 'ease-out',
+    });
+  }
 }
 
 async function refreshIp() {
   if (refreshIpButton.disabled || refreshInProgress) return;
   refreshInProgress = true;
   refreshIpButton.disabled = true;
-  ipLine.classList.add('updating');
-  pingLine.classList.add('updating');
   try {
-    const response = await sendMessage({ action: 'checkProxy' });
+    const response = await sendRuntimeMessage({ action: 'checkProxy' });
     if (!response?.ok) {
       if (response?.busy) {
         updateLiveText(ipLine, 'Текущий IP: выполняется проверка прокси');
@@ -179,7 +173,7 @@ async function refreshIp() {
     showPopupError('');
     renderTips([]);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     updateLiveText(ipLine, `Текущий IP: ошибка (${message})`);
     updateLiveText(pingLine, 'Пинг: —');
     if (currentEnabled) showPopupError(message);
@@ -187,10 +181,6 @@ async function refreshIp() {
   } finally {
     refreshIpButton.disabled = false;
     refreshInProgress = false;
-    requestAnimationFrame(() => {
-      ipLine.classList.remove('updating');
-      pingLine.classList.remove('updating');
-    });
   }
 }
 
@@ -200,7 +190,7 @@ function renderTips(items = [
   'Откройте chrome://net-internals/#proxy для диагностики Chrome.',
 ]) {
   const tips = Array.isArray(items) ? items : [];
-  tipsList.innerHTML = '';
+  tipsList.replaceChildren();
   for (const tip of tips) {
     const item = document.createElement('li');
     item.textContent = tip;
@@ -215,6 +205,18 @@ async function updateFromBackground() {
   await refreshIp();
 }
 
+async function restoreUiAfterError(error, reloadProfiles = false) {
+  try {
+    if (reloadProfiles) {
+      await loadProfiles();
+    }
+    await loadStatus();
+  } catch (reloadError) {
+    console.error('Unable to restore popup state:', reloadError);
+  }
+  showPopupError(errorMessage(error));
+}
+
 enabledToggle.addEventListener('change', async () => {
   enabledToggle.disabled = true;
   try {
@@ -224,18 +226,17 @@ enabledToggle.addEventListener('change', async () => {
         throw new Error('Сначала выберите профиль.');
       }
 
-      await sendCommand({
+      await sendRuntimeCommand({
         action: 'enable',
         profileId: selectedProfileId,
         protocol: protocolSelect.value,
       });
     } else {
-      await sendCommand({ action: 'disable' });
+      await sendRuntimeCommand({ action: 'disable' });
     }
     await updateFromBackground();
   } catch (error) {
-    await loadStatus();
-    showPopupError(error instanceof Error ? error.message : String(error));
+    await restoreUiAfterError(error);
   } finally {
     enabledToggle.disabled = false;
   }
@@ -247,10 +248,10 @@ profileSelect.addEventListener('change', async () => {
     const selectedProfileId = profileSelect.value || null;
     currentActiveProfileId = selectedProfileId;
     if (!selectedProfileId) {
-      await sendCommand({ action: 'applyProfile', profileId: null, protocol: 'auto' });
+      await sendRuntimeCommand({ action: 'applyProfile', profileId: null, protocol: 'auto' });
     } else {
       updateProtocolOptions();
-      await sendCommand({
+      await sendRuntimeCommand({
         action: 'applyProfile',
         profileId: selectedProfileId,
         protocol: protocolSelect.value,
@@ -260,9 +261,7 @@ profileSelect.addEventListener('change', async () => {
     await loadStatus();
     await refreshIp();
   } catch (error) {
-    await loadProfiles();
-    await loadStatus();
-    showPopupError(error instanceof Error ? error.message : String(error));
+    await restoreUiAfterError(error, true);
   } finally {
     profileSelect.disabled = false;
   }
@@ -272,13 +271,12 @@ protocolSelect.addEventListener('change', async () => {
   protocolSelect.disabled = true;
   try {
     if (currentActiveProfileId) {
-      await sendCommand({ action: 'applyProfile', profileId: currentActiveProfileId, protocol: protocolSelect.value });
+      await sendRuntimeCommand({ action: 'applyProfile', profileId: currentActiveProfileId, protocol: protocolSelect.value });
       await loadStatus();
       await refreshIp();
     }
   } catch (error) {
-    await loadStatus();
-    showPopupError(error instanceof Error ? error.message : String(error));
+    await restoreUiAfterError(error);
   } finally {
     protocolSelect.disabled = false;
   }
@@ -291,16 +289,23 @@ settingsButton.addEventListener('click', async () => {
   try {
     await chrome.runtime.openOptionsPage();
   } catch (error) {
-    showPopupError(error instanceof Error ? error.message : String(error));
+    showPopupError(errorMessage(error));
   }
 });
 
 try {
   await updateFromBackground();
 } catch (error) {
-  showPopupError(error instanceof Error ? error.message : String(error));
+  showPopupError(errorMessage(error));
 }
 
-setInterval(() => {
-  refreshIp();
+refreshTimerId = setInterval(() => {
+  void refreshIp();
 }, 5000);
+
+window.addEventListener('pagehide', () => {
+  if (refreshTimerId) {
+    clearInterval(refreshTimerId);
+    refreshTimerId = null;
+  }
+}, { once: true });
