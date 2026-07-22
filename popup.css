@@ -511,6 +511,15 @@ select:disabled,
   line-height: 1.35;
 }
 
+.blocking-card:has(.info-tooltip:not(.hidden)) {
+  gap: 0;
+}
+
+.blocking-card:has(.info-tooltip:not(.hidden)) .content-setting:not(:has(.info-tooltip:not(.hidden))),
+.blocking-card:has(.info-tooltip:not(.hidden)) .protection-summary {
+  display: none;
+}
+
 .protection-summary {
   display: grid;
   gap: 4px;
