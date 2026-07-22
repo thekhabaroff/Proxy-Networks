@@ -35,11 +35,13 @@ const CHECK_TIMEOUT_MS = 15000;
 const STATIC_RULESET_IDS = Object.freeze({
   tracking: ['trackers_rules'],
 });
-const CONTROLLABLE_PROXY_LEVELS = new Set([
+const CONTROLLABLE_SETTING_LEVELS = new Set([
   'controllable_by_this_extension',
   'controlled_by_this_extension',
 ]);
 const PROXY_CONTROL_ERROR = 'Настройки прокси контролируются политикой Chrome или другим расширением.';
+const WEBRTC_PROTECTION_VALUE = 'disable_non_proxied_udp';
+const WEBRTC_CONTROL_ERROR = 'Защита WebRTC контролируется политикой Chrome или другим расширением.';
 let endpointCheckInProgress = false;
 let proxyHealthCheckInProgress = false;
 let endpointTestAuth = null;
@@ -243,9 +245,78 @@ function proxyGet() {
 }
 
 function assertProxyControllable(proxySetting) {
-  if (!CONTROLLABLE_PROXY_LEVELS.has(proxySetting?.levelOfControl)) {
+  if (!CONTROLLABLE_SETTING_LEVELS.has(proxySetting?.levelOfControl)) {
     throw new Error(PROXY_CONTROL_ERROR);
   }
+}
+
+function webRtcPolicyGet() {
+  return new Promise((resolve, reject) => {
+    chrome.privacy.network.webRTCIPHandlingPolicy.get({}, (details) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve(details ?? {});
+    });
+  });
+}
+
+function webRtcPolicySet(value) {
+  return new Promise((resolve, reject) => {
+    chrome.privacy.network.webRTCIPHandlingPolicy.set({ value }, () => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function webRtcPolicyClear() {
+  return new Promise((resolve, reject) => {
+    chrome.privacy.network.webRTCIPHandlingPolicy.clear({}, () => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function webRtcProtectionStatus(setting) {
+  const levelOfControl = setting?.levelOfControl ?? 'not_controllable';
+  const controllable = CONTROLLABLE_SETTING_LEVELS.has(levelOfControl);
+  const enabled = levelOfControl === 'controlled_by_this_extension'
+    && setting?.value === WEBRTC_PROTECTION_VALUE;
+  return {
+    enabled,
+    controllable,
+    message: controllable ? '' : WEBRTC_CONTROL_ERROR,
+  };
+}
+
+async function getWebRtcProtectionStatus() {
+  return webRtcProtectionStatus(await webRtcPolicyGet());
+}
+
+async function setWebRtcProtection(enabled) {
+  const current = await webRtcPolicyGet();
+  const levelOfControl = current?.levelOfControl;
+  if (enabled) {
+    if (!CONTROLLABLE_SETTING_LEVELS.has(levelOfControl)) {
+      throw new Error(WEBRTC_CONTROL_ERROR);
+    }
+    await webRtcPolicySet(WEBRTC_PROTECTION_VALUE);
+  } else if (levelOfControl === 'controlled_by_this_extension') {
+    await webRtcPolicyClear();
+  }
+  return getWebRtcProtectionStatus();
 }
 
 async function restoreProxySetting(proxySetting) {
@@ -409,9 +480,9 @@ async function updateActionIcon() {
   try {
     await chrome.action.setIcon({
       path: {
-        16: `icons/globe-${color}-16.png`,
-        48: `icons/globe-${color}-48.png`,
-        128: `icons/globe-${color}-128.png`,
+        16: `images/globe-${color}-16.png`,
+        48: `images/globe-${color}-48.png`,
+        128: `images/globe-${color}-128.png`,
       },
     });
   } catch (error) {
@@ -563,7 +634,12 @@ async function testProxyEndpoint(endpoint, credentials) {
     previousProxySetting = await proxyGet();
     assertProxyControllable(previousProxySetting);
     await proxySet({ mode: 'fixed_servers', rules: { singleProxy: server } }, 'regular');
-    result = { ok: true, ip: await fetchExternalIp() };
+    const measurement = await fetchExternalIpWithLatency();
+    result = {
+      ok: true,
+      ip: measurement.ip,
+      ping: measurement.latencyMs,
+    };
   } catch (error) {
     result = { ok: false, error: errorMessage(error) };
   } finally {
@@ -732,6 +808,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return;
     }
 
+    if (message.action === 'getWebRtcProtection') {
+      sendResponse({ ok: true, ...await getWebRtcProtectionStatus() });
+      return;
+    }
+
+    if (message.action === 'setWebRtcProtection') {
+      sendResponse({ ok: true, ...await setWebRtcProtection(message.enabled === true) });
+      return;
+    }
+
     if (message.action === 'syncBlockRules') {
       const count = await withProxyOperation(syncContentBlockingRules);
       sendResponse({ ok: true, count });
@@ -754,7 +840,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           throw new Error(PROXY_CONTROL_ERROR);
         }
         const result = await fetchExternalIpWithLatency();
-        if (await getEnabled()) await setLastError(null);
+        if (await getEnabled()) {
+          await setLastError(null);
+        }
         await updateActionIcon();
         sendResponse({
           ok: true,

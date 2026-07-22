@@ -19,10 +19,17 @@ const ipLine = document.getElementById('ipLine');
 const pingLine = document.getElementById('pingLine');
 const errorBanner = document.getElementById('errorBanner');
 const toggleLabel = document.getElementById('toggleLabel');
+const connectionHint = document.getElementById('connectionHint');
 const refreshIpButton = document.getElementById('refreshIpButton');
 const settingsButton = document.getElementById('settingsButton');
 const tipsList = document.getElementById('tipsList');
+const webRtcProtectionInput = document.getElementById('webRtcProtection');
+const webRtcInfoButton = document.getElementById('webRtcInfoButton');
+const webRtcInfoTip = document.getElementById('webRtcInfoTip');
 const blockTrackingInput = document.getElementById('blockTracking');
+const blockTrackingInfoButton = document.getElementById('blockTrackingInfoButton');
+const blockTrackingInfoTip = document.getElementById('blockTrackingInfoTip');
+const webRtcProtectionStatus = document.getElementById('webRtcProtectionStatus');
 
 let profilesCache = [];
 let currentEnabled = false;
@@ -30,11 +37,22 @@ let currentActiveProfileId = null;
 let currentProtocol = 'auto';
 let refreshInProgress = false;
 let refreshTimerId = null;
+let webRtcProtectionState = null;
+const LIVE_REFRESH_INTERVAL_MS = 3000;
+const WEB_RTC_INFO_DEFAULT = 'Снижает риск раскрытия реального IP через WebRTC. Может повлиять на звонки и P2P-соединения.';
+const infoControls = [
+  { button: webRtcInfoButton, tooltip: webRtcInfoTip },
+  { button: blockTrackingInfoButton, tooltip: blockTrackingInfoTip },
+];
 
 async function loadStatus() {
-  const blockingSettings = await getContentBlockingSettings();
+  const [blockingSettings, response, webRtcStatus] = await Promise.all([
+    getContentBlockingSettings(),
+    sendRuntimeCommand({ action: 'getStatus' }),
+    sendRuntimeCommand({ action: 'getWebRtcProtection' }),
+  ]);
   blockTrackingInput.checked = blockingSettings.tracking;
-  const response = await sendRuntimeCommand({ action: 'getStatus' });
+  renderWebRtcProtection(webRtcStatus);
   currentEnabled = Boolean(response?.enabled);
   currentActiveProfileId = response?.activeProfileId ?? null;
   currentProtocol = response?.selectedProtocol ?? 'auto';
@@ -43,6 +61,7 @@ async function loadStatus() {
   pingLine.classList.toggle('hidden', !currentEnabled);
   protocolField.classList.toggle('hidden', !currentActiveProfileId);
   toggleLabel.textContent = currentEnabled ? 'Прокси включён' : 'Прокси выключен';
+  connectionHint.textContent = currentEnabled ? 'Защищённое подключение' : 'Подключение без прокси';
   statusLine.textContent = currentEnabled ? `Активен: ${response?.activeProfileName ?? 'без названия'}` : '';
   statusLine.classList.toggle('hidden', !currentEnabled);
 
@@ -63,6 +82,52 @@ async function loadStatus() {
   } else {
     errorBanner.textContent = '';
     errorBanner.classList.add('hidden');
+  }
+}
+
+function renderWebRtcProtection(status) {
+  webRtcProtectionState = status ?? null;
+  webRtcProtectionInput.checked = Boolean(status?.enabled);
+  webRtcProtectionInput.disabled = !status?.controllable;
+  webRtcInfoTip.textContent = status?.message || WEB_RTC_INFO_DEFAULT;
+  const statusText = status?.enabled
+    ? 'WebRTC: защита активна'
+    : status?.controllable
+      ? 'WebRTC: защита выключена'
+      : 'WebRTC: защита недоступна';
+  webRtcProtectionStatus.textContent = statusText;
+  webRtcProtectionStatus.classList.toggle('active', Boolean(status?.enabled));
+  webRtcProtectionStatus.classList.toggle('unavailable', !status?.controllable);
+}
+
+function closeInfoTooltips(exceptButton = null) {
+  for (const { button, tooltip } of infoControls) {
+    if (button === exceptButton) continue;
+    tooltip.classList.add('hidden');
+    button.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function toggleInfoTooltip(button, tooltip) {
+  const shouldOpen = tooltip.classList.contains('hidden');
+  closeInfoTooltips();
+  tooltip.classList.toggle('hidden', !shouldOpen);
+  button.setAttribute('aria-expanded', String(shouldOpen));
+}
+
+async function saveWebRtcProtection() {
+  const requestedEnabled = webRtcProtectionInput.checked;
+  webRtcProtectionInput.disabled = true;
+  try {
+    const response = await sendRuntimeCommand({
+      action: 'setWebRtcProtection',
+      enabled: requestedEnabled,
+    });
+    renderWebRtcProtection(response);
+    showPopupError('');
+  } catch (error) {
+    renderWebRtcProtection(webRtcProtectionState);
+    showPopupError(errorMessage(error));
   }
 }
 
@@ -133,12 +198,12 @@ function showPopupError(message) {
   errorBanner.classList.toggle('hidden', !message);
 }
 
-function updateLiveText(element, text) {
+function updateLiveText(element, text, animate = true) {
   if (element.textContent === text) {
     return;
   }
   element.textContent = text;
-  if (typeof element.animate === 'function') {
+  if (animate && typeof element.animate === 'function') {
     element.animate([
       { opacity: 0.62, transform: 'translateY(1px)' },
       { opacity: 1, transform: 'translateY(0)' },
@@ -150,9 +215,8 @@ function updateLiveText(element, text) {
 }
 
 async function refreshIp() {
-  if (refreshIpButton.disabled || refreshInProgress) return;
+  if (refreshInProgress) return;
   refreshInProgress = true;
-  refreshIpButton.disabled = true;
   try {
     const response = await sendRuntimeMessage({ action: 'checkProxy' });
     if (!response?.ok) {
@@ -161,7 +225,7 @@ async function refreshIp() {
         return;
       }
       updateLiveText(ipLine, `Текущий IP: ошибка (${response?.error ?? 'Не удалось проверить IP'})`);
-      updateLiveText(pingLine, 'Пинг: —');
+      updateLiveText(pingLine, 'Пинг: —', false);
       if (currentEnabled) showPopupError(response?.error ?? 'Не удалось проверить IP');
       renderTips(response?.tips);
       return;
@@ -169,17 +233,16 @@ async function refreshIp() {
     updateLiveText(ipLine, `Текущий IP: ${response.ip ?? 'неизвестен'}`);
     updateLiveText(pingLine, currentEnabled && Number.isFinite(response.ping)
       ? `Пинг: ${response.ping} мс`
-      : 'Пинг: —');
+      : 'Пинг: —', false);
     showPopupError('');
     renderTips([]);
   } catch (error) {
     const message = errorMessage(error);
     updateLiveText(ipLine, `Текущий IP: ошибка (${message})`);
-    updateLiveText(pingLine, 'Пинг: —');
+    updateLiveText(pingLine, 'Пинг: —', false);
     if (currentEnabled) showPopupError(message);
     renderTips();
   } finally {
-    refreshIpButton.disabled = false;
     refreshInProgress = false;
   }
 }
@@ -283,7 +346,27 @@ protocolSelect.addEventListener('change', async () => {
 });
 
 refreshIpButton.addEventListener('click', refreshIp);
+webRtcProtectionInput.addEventListener('change', saveWebRtcProtection);
 blockTrackingInput.addEventListener('change', saveContentBlockingSettings);
+
+for (const { button, tooltip } of infoControls) {
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleInfoTooltip(button, tooltip);
+  });
+}
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.content-setting')) {
+    closeInfoTooltips();
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeInfoTooltips();
+  }
+});
 
 settingsButton.addEventListener('click', async () => {
   try {
@@ -301,7 +384,7 @@ try {
 
 refreshTimerId = setInterval(() => {
   void refreshIp();
-}, 5000);
+}, LIVE_REFRESH_INTERVAL_MS);
 
 window.addEventListener('pagehide', () => {
   if (refreshTimerId) {

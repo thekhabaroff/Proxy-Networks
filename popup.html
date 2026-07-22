@@ -9,21 +9,25 @@
   <body>
     <main class="popup">
       <header class="header">
-        <div class="title-group">
-          <div class="traffic-lights" aria-hidden="true">
-            <span class="traffic-light red"></span>
-            <span class="traffic-light yellow"></span>
-            <span class="traffic-light green"></span>
+        <div class="brand-lockup">
+          <img class="brand-mark" src="images/logo-brand-48.png" width="32" height="32" alt="" />
+          <div>
+            <p class="eyebrow">NETWORK PRIVACY</p>
+            <h1>Proxy Networks</h1>
           </div>
-          <h1>Proxy Networks</h1>
         </div>
-        <button id="settingsButton" class="settings-button" type="button" aria-label="Настройки" title="Настройки">⚙</button>
+        <button id="settingsButton" class="settings-button" type="button" aria-label="Настройки" title="Настройки">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.9 2h2.2l.5 2.1c.6.2 1.2.4 1.7.7l1.9-1 1.6 1.6-1 1.9c.3.5.5 1.1.7 1.7l2.1.5v2.2l-2.1.5c-.2.6-.4 1.2-.7 1.7l1 1.9-1.6 1.6-1.9-1c-.5.3-1.1.5-1.7.7l-.5 2.1h-2.2l-.5-2.1c-.6-.2-1.2-.4-1.7-.7l-1.9 1-1.6-1.6 1-1.9c-.3-.5-.5-1.1-.7-1.7L3.4 13V10.8l2.1-.5c.2-.6.4-1.2.7-1.7l-1-1.9 1.6-1.6 1.9 1c.5-.3 1.1-.5 1.7-.7L10.9 2Z" /><circle cx="12" cy="12" r="3.1" /></svg>
+        </button>
       </header>
 
       <section class="card">
         <label class="toggle">
           <input id="enabledToggle" type="checkbox" />
-          <span id="toggleLabel">Прокси выключен</span>
+          <span class="toggle-copy">
+            <span id="toggleLabel">Прокси выключен</span>
+            <small id="connectionHint">Подключение без прокси</small>
+          </span>
         </label>
 
         <label class="field">
@@ -40,18 +44,53 @@
           </select>
         </label>
 
-        <div id="statusLine" class="status hidden" role="status" aria-live="polite"></div>
-        <div id="ipLine" class="ip" role="status" aria-live="polite">Текущий IP: —</div>
-        <div id="pingLine" class="ip hidden" role="status" aria-live="polite">Пинг: —</div>
+        <div class="live-data">
+          <div id="statusLine" class="status hidden" role="status" aria-live="polite"></div>
+          <div id="ipLine" class="ip" role="status" aria-live="polite">Текущий IP: —</div>
+          <div id="pingLine" class="ip hidden" role="status" aria-live="polite">Пинг: —</div>
+        </div>
         <ul id="tipsList" class="tips hidden" aria-label="Советы по диагностике"></ul>
-        <button id="refreshIpButton" type="button">Обновить IP</button>
+        <button id="refreshIpButton" class="refresh-button" type="button">Обновить IP</button>
       </section>
 
       <section class="blocking-card" aria-label="Блокировка контента">
-        <label class="content-toggle">
-          <input id="blockTracking" type="checkbox" />
-          <span>Блокировать трекеры</span>
-        </label>
+        <div class="content-setting">
+          <label id="webRtcProtectionLabel" class="content-toggle">
+            <input id="webRtcProtection" type="checkbox" />
+            <span>Защита от утечек WebRTC</span>
+          </label>
+          <button
+            id="webRtcInfoButton"
+            class="info-button"
+            type="button"
+            aria-label="О защите от утечек WebRTC"
+            aria-expanded="false"
+            aria-controls="webRtcInfoTip"
+          >i</button>
+          <div id="webRtcInfoTip" class="info-tooltip hidden" role="tooltip">
+            Снижает риск раскрытия реального IP через WebRTC. Может повлиять на звонки и P2P-соединения.
+          </div>
+        </div>
+        <div class="content-setting">
+          <label class="content-toggle">
+            <input id="blockTracking" type="checkbox" />
+            <span>Блокировать трекеры</span>
+          </label>
+          <button
+            id="blockTrackingInfoButton"
+            class="info-button"
+            type="button"
+            aria-label="О блокировке трекеров"
+            aria-expanded="false"
+            aria-controls="blockTrackingInfoTip"
+          >i</button>
+          <div id="blockTrackingInfoTip" class="info-tooltip hidden" role="tooltip">
+            Блокирует известные домены трекеров. Работает независимо от состояния прокси.
+          </div>
+        </div>
+        <div class="protection-summary" aria-label="Статистика защиты">
+          <div id="webRtcProtectionStatus" class="protection-status" role="status" aria-live="polite">WebRTC: проверка…</div>
+        </div>
       </section>
 
       <section id="errorBanner" class="banner hidden" role="alert" aria-live="assertive"></section>

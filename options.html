@@ -9,11 +9,12 @@
   <body>
     <main class="layout">
       <aside class="sidebar" aria-label="Профили и ссылки">
-        <div class="window-header">
-          <span class="traffic-light red" aria-hidden="true"></span>
-          <span class="traffic-light yellow" aria-hidden="true"></span>
-          <span class="traffic-light green" aria-hidden="true"></span>
-          <h1>Профили</h1>
+        <div class="brand-lockup sidebar-brand">
+          <img class="brand-mark" src="images/logo-brand-48.png" width="38" height="38" alt="" />
+          <div>
+            <p class="eyebrow">PROXY NETWORKS</p>
+            <h1>Профили</h1>
+          </div>
         </div>
         <div class="sidebar-header">
           <button id="newProfileButton" type="button">Новый профиль</button>
@@ -25,7 +26,7 @@
         </div>
         <div id="profilesList" class="profiles-list" role="group" aria-label="Список профилей"></div>
         <a class="sidebar-link" href="https://tg.cryptonetworks.online/connect" target="_blank" rel="noopener noreferrer">Бесплатный прокси для Telegram</a>
-        <a class="sidebar-link" href="https://t.me/cryptonetworks_bot" target="_blank" rel="noopener noreferrer">Стабильный VPN</a>
+        <a class="sidebar-link" href="https://t.me/cryptonetworks_bot" target="_blank" rel="noopener noreferrer">Стабильный VPN — 99 ₽/мес</a>
       </aside>
 
       <section class="editor" aria-labelledby="formTitle">
@@ -48,9 +49,30 @@
           </label>
 
           <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">CONNECTION</p>
+                <h3>Прокси-серверы</h3>
+              </div>
+              <span class="panel-caption">HTTP · HTTPS · SOCKS5</span>
+            </div>
+            <div class="proxy-import">
+              <div class="proxy-import-copy">
+                <p class="proxy-import-title">Форматы вставки</p>
+                <div class="proxy-format-list" aria-label="Поддерживаемые форматы прокси">
+                  <code>host:port</code>
+                  <code>host:port:user:pass</code>
+                  <code>host:port@user:pass</code>
+                  <code>user:pass:host:port</code>
+                  <code>protocol://user:pass@host:port</code>
+                </div>
+                <p class="proxy-import-note">Поддерживаются URL и разделители <code>:</code>, <code>;</code>, <code>|</code>.</p>
+              </div>
+              <button id="pasteProxyButton" type="button">Вставить из буфера</button>
+            </div>
             <div class="advanced">
               <div class="field">
-                <div class="field-header"><span>HTTP прокси <span class="proxy-status" data-protocol="http" role="status" aria-label="Статус HTTP: не проверен"></span></span><button class="check-proxy-button" data-protocol="http" type="button">Проверить</button></div>
+                <div class="field-header"><span>HTTP прокси <span class="proxy-status" data-protocol="http" role="status" aria-label="Статус HTTP: не проверен"></span><span class="proxy-ping" data-protocol="http" aria-live="polite"></span></span><button class="check-proxy-button" data-protocol="http" type="button">Проверить</button></div>
                 <div class="row">
                   <input id="httpHost" type="text" maxlength="253" placeholder="Хост" aria-label="Хост HTTP прокси" autocomplete="off" spellcheck="false" />
                   <input id="httpPort" type="number" min="1" max="65535" placeholder="Порт" aria-label="Порт HTTP прокси" />
@@ -58,7 +80,7 @@
               </div>
 
               <div class="field">
-                <div class="field-header"><span>HTTPS прокси <span class="proxy-status" data-protocol="https" role="status" aria-label="Статус HTTPS: не проверен"></span></span><button class="check-proxy-button" data-protocol="https" type="button">Проверить</button></div>
+                <div class="field-header"><span>HTTPS прокси <span class="proxy-status" data-protocol="https" role="status" aria-label="Статус HTTPS: не проверен"></span><span class="proxy-ping" data-protocol="https" aria-live="polite"></span></span><button class="check-proxy-button" data-protocol="https" type="button">Проверить</button></div>
                 <div class="row">
                   <input id="httpsHost" type="text" maxlength="253" placeholder="Хост" aria-label="Хост HTTPS прокси" autocomplete="off" spellcheck="false" />
                   <input id="httpsPort" type="number" min="1" max="65535" placeholder="Порт" aria-label="Порт HTTPS прокси" />
@@ -66,7 +88,7 @@
               </div>
 
               <div class="field">
-                <div class="field-header"><span>SOCKS5 прокси <span class="proxy-status" data-protocol="socks" role="status" aria-label="Статус SOCKS5: не проверен"></span></span><button class="check-proxy-button" data-protocol="socks" type="button">Проверить</button></div>
+                <div class="field-header"><span>SOCKS5 прокси <span class="proxy-status" data-protocol="socks" role="status" aria-label="Статус SOCKS5: не проверен"></span><span class="proxy-ping" data-protocol="socks" aria-live="polite"></span></span><button class="check-proxy-button" data-protocol="socks" type="button">Проверить</button></div>
                 <div class="row">
                   <input id="socksHost" type="text" maxlength="253" placeholder="Хост" aria-label="Хост SOCKS5 прокси" autocomplete="off" spellcheck="false" />
                   <input id="socksPort" type="number" min="1" max="65535" placeholder="Порт" aria-label="Порт SOCKS5 прокси" />
@@ -76,7 +98,8 @@
 
             <div class="field">
               <label for="bypassList">Исключения, по одному на строку или через запятую</label>
-              <textarea id="bypassList" rows="4" spellcheck="false"></textarea>
+              <textarea id="bypassList" rows="4" spellcheck="false" placeholder="*.example.com&#10;geosite:category-ip-geo"></textarea>
+              <small class="hint">Запросы к этим доменам идут напрямую, минуя выбранный прокси. Поддерживаются домены и geosite-базы.</small>
               <label class="checkbox-field">
                 <input id="bypassRussianResources" type="checkbox" />
                 <span>Исключить российские ресурсы</span>
@@ -95,7 +118,13 @@
           </section>
 
           <section class="panel">
-            <h3>Авторизация</h3>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">CREDENTIALS</p>
+                <h3>Авторизация</h3>
+              </div>
+              <span class="panel-caption">HTTP(S)</span>
+            </div>
             <div class="row">
               <label class="field">
                 <span>Логин</span>

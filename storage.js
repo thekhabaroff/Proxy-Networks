@@ -318,6 +318,28 @@ export async function saveProfile(profile) {
   return saved;
 }
 
+export async function reorderProfiles(profileIds) {
+  if (!Array.isArray(profileIds)) {
+    throw new TypeError('Порядок профилей должен быть массивом идентификаторов.');
+  }
+
+  await withStorageLock(STATE_LOCK_NAME, async () => {
+    const profiles = await getStoredProfiles();
+    const uniqueIds = new Set(profileIds);
+    if (uniqueIds.size !== profiles.length || uniqueIds.size !== profileIds.length) {
+      throw new Error('Некорректный порядок профилей.');
+    }
+
+    const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
+    const reorderedProfiles = profileIds.map((profileId) => profilesById.get(profileId));
+    if (reorderedProfiles.some((profile) => !profile)) {
+      throw new Error('Не удалось найти один из профилей.');
+    }
+
+    await storageSet({ [STORAGE_KEYS.profiles]: reorderedProfiles });
+  });
+}
+
 export async function deleteProfile(id) {
   if (!id) {
     return;

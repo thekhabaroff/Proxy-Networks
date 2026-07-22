@@ -1,7 +1,7 @@
 <h1 align="center">Proxy Networks</h1>
 
 <p align="center">
-  <img src="icons/logo-brand-128.png" width="128" height="128" alt="Proxy Networks logo">
+  <img src="images/logo-brand-128.png" width="128" height="128" alt="Proxy Networks logo">
 </p>
 
 <div align="center">
@@ -144,7 +144,7 @@ npm run check
 ├── rules/                # локальные сети, российские ресурсы и трекеры
 ├── popup.*               # миниатюра расширения
 ├── options.*             # редактор профилей
-└── icons/                # брендовые и статусные PNG
+└── images/               # брендовые и статусные PNG
 ```
 
 ## Диагностика

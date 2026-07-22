@@ -4,6 +4,7 @@ import {
   getEnabled,
   getProfiles,
   normalizeProfile,
+  reorderProfiles,
   saveProfile,
   saveProfiles,
 } from './storage.js';
@@ -13,6 +14,7 @@ import {
   isValidProxyHost,
   normalizeDomain,
   normalizePort,
+  parseProxyClipboardEntry,
   normalizeStringList,
   sendRuntimeCommand,
   sendRuntimeMessage,
@@ -46,6 +48,7 @@ const importProfilesButton = document.getElementById('importProfilesButton');
 const importProfilesInput = document.getElementById('importProfilesInput');
 const togglePasswordButton = document.getElementById('togglePasswordButton');
 const clearPasswordButton = document.getElementById('clearPasswordButton');
+const pasteProxyButton = document.getElementById('pasteProxyButton');
 
 const ALLOWED_SCHEMES = new Set(['http', 'https', 'socks5']);
 const PROXY_URL_PROTOCOLS = new Set(['http:', 'https:', 'socks:', 'socks5:']);
@@ -63,6 +66,9 @@ const PROXY_FIELDS = Object.freeze({
 let profiles = [];
 let selectedProfileId = null;
 let successTimer = null;
+let draggedProfileId = null;
+const proxyStatusTimers = new Map();
+const PROXY_RESULT_TIMEOUT_MS = 10000;
 
 function showError(message) {
   if (!message) {
@@ -140,12 +146,76 @@ function renderProfileList() {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = `profile-item${profile.id === selectedProfileId ? ' active' : ''}`;
-    item.textContent = profile.name || profile.id;
+    item.draggable = true;
+    item.title = 'Перетащите профиль, чтобы изменить порядок.';
     item.setAttribute('aria-pressed', String(profile.id === selectedProfileId));
+    const name = document.createElement('span');
+    name.className = 'profile-name';
+    name.textContent = profile.name || profile.id;
+    item.append(name);
     item.addEventListener('click', () => {
       loadProfile(profile.id);
     });
+    item.addEventListener('dragstart', (event) => {
+      draggedProfileId = profile.id;
+      item.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', profile.id);
+    });
+    item.addEventListener('dragend', () => {
+      draggedProfileId = null;
+      item.classList.remove('dragging');
+      profilesList.querySelectorAll('.drop-target').forEach((element) => {
+        element.classList.remove('drop-target');
+      });
+    });
+    item.addEventListener('dragover', (event) => {
+      if (!draggedProfileId || draggedProfileId === profile.id) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    });
+    item.addEventListener('dragenter', () => {
+      if (draggedProfileId && draggedProfileId !== profile.id) {
+        item.classList.add('drop-target');
+      }
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('drop-target');
+    });
+    item.addEventListener('drop', (event) => {
+      event.preventDefault();
+      item.classList.remove('drop-target');
+      const sourceId = draggedProfileId || event.dataTransfer.getData('text/plain');
+      void moveProfile(sourceId, profile.id);
+    });
     profilesList.append(item);
+  }
+}
+
+async function moveProfile(sourceId, targetId) {
+  if (!sourceId || sourceId === targetId) {
+    return;
+  }
+
+  const sourceIndex = profiles.findIndex((profile) => profile.id === sourceId);
+  const targetIndex = profiles.findIndex((profile) => profile.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+
+  const nextProfiles = [...profiles];
+  const [movedProfile] = nextProfiles.splice(sourceIndex, 1);
+  const insertionIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  nextProfiles.splice(insertionIndex, 0, movedProfile);
+  profiles = nextProfiles;
+  renderProfileList();
+
+  try {
+    await reorderProfiles(profiles.map((profile) => profile.id));
+    showSuccess('Порядок профилей сохранён.');
+  } catch (error) {
+    await loadProfiles();
+    showError(errorMessage(error));
   }
 }
 
@@ -165,9 +235,42 @@ function setProxyStatus(status, state = '', details = '') {
   status.setAttribute('aria-label', `Статус ${protocolName}: ${statusText}${details ? `. ${details}` : ''}`);
 }
 
+function setProxyPing(protocol, ping = null) {
+  const pingElement = document.querySelector(`.proxy-ping[data-protocol="${protocol}"]`);
+  if (!pingElement) {
+    return;
+  }
+  pingElement.textContent = Number.isFinite(ping) ? `Пинг: ${ping} мс` : '';
+}
+
+function clearProxyStatusTimer(protocol) {
+  const timerId = proxyStatusTimers.get(protocol);
+  if (timerId) {
+    clearTimeout(timerId);
+    proxyStatusTimers.delete(protocol);
+  }
+}
+
+function clearProxyCheckResult(protocol) {
+  const status = document.querySelector(`.proxy-status[data-protocol="${protocol}"]`);
+  setProxyStatus(status);
+  setProxyPing(protocol);
+}
+
+function scheduleProxyCheckResultClear(protocol) {
+  clearProxyStatusTimer(protocol);
+  const timerId = setTimeout(() => {
+    clearProxyCheckResult(protocol);
+    proxyStatusTimers.delete(protocol);
+  }, PROXY_RESULT_TIMEOUT_MS);
+  proxyStatusTimers.set(protocol, timerId);
+}
+
 function resetProtocolStatuses() {
   for (const status of document.querySelectorAll('.proxy-status')) {
-    setProxyStatus(status);
+    const protocol = status.dataset.protocol;
+    clearProxyStatusTimer(protocol);
+    clearProxyCheckResult(protocol);
   }
 }
 
@@ -203,8 +306,11 @@ function loadProfile(id) {
 }
 
 async function loadProfiles() {
-  profiles = await getProfiles();
-  const activeProfileId = await getActiveProfileId();
+  const [loadedProfiles, activeProfileId] = await Promise.all([
+    getProfiles(),
+    getActiveProfileId(),
+  ]);
+  profiles = loadedProfiles;
   selectedProfileId = selectedProfileId && profiles.some((item) => item.id === selectedProfileId)
     ? selectedProfileId
     : activeProfileId ?? profiles[0]?.id ?? null;
@@ -293,6 +399,28 @@ function collectProfile() {
   };
 }
 
+function applyClipboardProxy(proxy) {
+  const fields = PROXY_FIELDS[proxy.protocol];
+  if (!fields) {
+    throw new Error('Не удалось определить тип прокси.');
+  }
+
+  fields.hostInput.value = proxy.host;
+  fields.portInput.value = String(proxy.port);
+  if (proxy.username !== null) {
+    usernameInput.value = proxy.username;
+    passwordInput.value = proxy.password ?? '';
+  }
+  resetProtocolStatuses();
+  showError('');
+
+  const protocolName = PROTOCOL_NAMES[proxy.protocol] ?? 'прокси';
+  const authNote = proxy.username === null
+    ? ' Данные авторизации не изменены.'
+    : '';
+  showSuccess(`${protocolName} прокси вставлен в форму.${authNote} Нажмите «Сохранить», чтобы применить изменения.`);
+}
+
 async function refreshAfterSave(savedProfile) {
   await loadProfiles();
   loadProfile(savedProfile.id);
@@ -367,12 +495,16 @@ for (const button of checkProxyButtons) {
     const endpoint = fields
       ? endpointFromInputs(fields.scheme, fields.hostInput, fields.portInput)
       : null;
+    clearProxyStatusTimer(protocol);
     if (!endpoint || !isValidProxyHost(endpoint.host) || !normalizePort(endpoint.port)) {
       setProxyStatus(status, 'invalid', 'Укажите корректные хост и порт.');
+      setProxyPing(protocol);
+      scheduleProxyCheckResultClear(protocol);
       return;
     }
     for (const checkButton of checkProxyButtons) checkButton.disabled = true;
     setProxyStatus(status, 'checking', 'Проверка…');
+    setProxyPing(protocol);
     try {
       const response = await sendRuntimeMessage({
         action: 'checkProxyEndpoint',
@@ -385,10 +517,13 @@ for (const button of checkProxyButtons) {
         response?.ok ? 'online' : 'offline',
         response?.error || (response?.ip ? `IP: ${response.ip}` : ''),
       );
+      setProxyPing(protocol, response?.ok ? response.ping : null);
     } catch (error) {
       setProxyStatus(status, 'offline', errorMessage(error));
+      setProxyPing(protocol);
     } finally {
       for (const checkButton of checkProxyButtons) checkButton.disabled = false;
+      scheduleProxyCheckResultClear(protocol);
     }
   });
 }
@@ -397,7 +532,8 @@ for (const [protocol, fields] of Object.entries(PROXY_FIELDS)) {
   for (const input of [fields.hostInput, fields.portInput]) {
     input.addEventListener('input', () => {
       const status = document.querySelector(`.proxy-status[data-protocol="${protocol}"]`);
-      setProxyStatus(status);
+      clearProxyStatusTimer(protocol);
+      clearProxyCheckResult(protocol);
     });
   }
 }
@@ -408,6 +544,13 @@ profileForm.addEventListener('input', () => {
 
 usernameInput.addEventListener('input', resetProtocolStatuses);
 passwordInput.addEventListener('input', resetProtocolStatuses);
+
+window.addEventListener('pagehide', () => {
+  for (const timerId of proxyStatusTimers.values()) {
+    clearTimeout(timerId);
+  }
+  proxyStatusTimers.clear();
+}, { once: true });
 
 exportProfilesButton.addEventListener('click', async () => {
   const includePasswords = confirm('Экспортировать профили вместе с паролями? Нажмите “Отмена”, чтобы экспортировать без паролей.');
@@ -493,6 +636,24 @@ importProfilesInput.addEventListener('change', async () => {
   } finally {
     importProfilesInput.value = '';
     importProfilesButton.disabled = false;
+  }
+});
+
+pasteProxyButton.addEventListener('click', async () => {
+  if (!navigator.clipboard?.readText) {
+    showError('Браузер не поддерживает чтение буфера обмена.');
+    return;
+  }
+
+  pasteProxyButton.disabled = true;
+  try {
+    const proxy = parseProxyClipboardEntry(await navigator.clipboard.readText());
+    applyClipboardProxy(proxy);
+  } catch (error) {
+    showSuccess('');
+    showError(errorMessage(error));
+  } finally {
+    pasteProxyButton.disabled = false;
   }
 });
 

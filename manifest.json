@@ -7,7 +7,9 @@
     "proxy",
     "webRequest",
     "webRequestAuthProvider",
+    "privacy",
     "storage",
+    "clipboardRead",
     "alarms",
     "declarativeNetRequestWithHostAccess"
   ],
@@ -31,16 +33,16 @@
     "default_popup": "popup.html",
     "default_title": "Proxy Networks",
     "default_icon": {
-      "16": "icons/globe-gray-16.png",
-      "48": "icons/globe-gray-48.png",
-      "128": "icons/globe-gray-128.png"
+      "16": "images/globe-gray-16.png",
+      "48": "images/globe-gray-48.png",
+      "128": "images/globe-gray-128.png"
     }
   },
   "options_page": "options.html",
   "minimum_chrome_version": "108",
   "icons": {
-    "16": "icons/logo-brand-16.png",
-    "48": "icons/logo-brand-48.png",
-    "128": "icons/logo-brand-128.png"
+    "16": "images/logo-brand-16.png",
+    "48": "images/logo-brand-48.png",
+    "128": "images/logo-brand-128.png"
   }
 }
