@@ -12,14 +12,16 @@
         <div class="brand-lockup">
           <img class="brand-mark" src="images/logo-brand-48.png" width="32" height="32" alt="" />
           <div>
-            <p class="eyebrow">SECURE CONNECTION</p>
             <h1>Proxy Networks</h1>
           </div>
         </div>
         <div class="header-actions">
-          <span id="versionBadge" class="version-badge" title="Версия расширения">v1.0.0</span>
+          <a id="versionBadge" class="version-badge" href="https://github.com/thekhabaroff/ProxyNetworks" target="_blank" rel="noopener noreferrer" aria-label="Открыть репозиторий Proxy Networks на GitHub" title="GitHub-репозиторий">v1.0.0</a>
+          <a class="telegram-button" href="https://t.me/proxynetworks_bot" target="_blank" rel="noopener noreferrer" aria-label="Открыть Telegram-бот" title="Telegram-бот">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.6 3.4 2.9 10.6c-1.3.5-1.3 1.2-.2 1.6l4.8 1.5 1.8 5.5c.2.6.1.8.8.8.5 0 .7-.2 1-.5l2.3-2.2 4.8 3.5c.9.5 1.5.3 1.8-.8l3.2-15.1c.5-1.4-.5-2-1.6-1.5ZM8.4 13.2l10.8-6.8c.5-.3 1-.1.6.3l-8.7 7.9-.3 3.3-1.7-4.7-.9-.3Z" /></svg>
+          </a>
           <button id="settingsButton" class="settings-button" type="button" aria-label="Настройки" title="Настройки">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.9 2h2.2l.5 2.1c.6.2 1.2.4 1.7.7l1.9-1 1.6 1.6-1 1.9c.3.5.5 1.1.7 1.7l2.1.5v2.2l-2.1.5c-.2.6-.4 1.2-.7 1.7l1 1.9-1.6 1.6-1.9-1c-.5.3-1.1.5-1.7.7l-.5 2.1h-2.2l-.5-2.1c-.6-.2-1.2-.4-1.7-.7l-1.9 1-1.6-1.6 1-1.9c-.3-.5-.5-1.1-.7-1.7L3.4 13V10.8l2.1-.5c.2-.6.4-1.2.7-1.7l-1-1.9 1.6-1.6 1.9 1c.5-.3 1.1-.5 1.7-.7L10.9 2Z" /><circle cx="12" cy="12" r="3.1" /></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" /><path d="m19.1 13.4 1.2.9-1.9 3.3-1.4-.6a7.8 7.8 0 0 1-1.7 1l-.2 1.5h-3.8l-.2-1.5a7.8 7.8 0 0 1-1.7-1l-1.4.6-1.9-3.3 1.2-.9a7.7 7.7 0 0 1 0-2.8l-1.2-.9L8 6.4l1.4.6a7.8 7.8 0 0 1 1.7-1l.2-1.5h3.8l.2 1.5a7.8 7.8 0 0 1 1.7 1l1.4-.6 1.9 3.3-1.2.9a7.7 7.7 0 0 1 0 2.8Z" /></svg>
           </button>
         </div>
       </header>
@@ -57,7 +59,10 @@
 
         <div class="live-data">
           <div id="proxyGeoInfo" class="proxy-geo-info hidden" role="status" aria-live="polite">
-            <div id="proxyGeoLocation" class="proxy-geo-location">Прокси: определяю локацию…</div>
+            <div class="proxy-geo-header">
+              <div id="proxyGeoLocation" class="proxy-geo-location">Прокси: определяю локацию…</div>
+              <span id="proxyGeoFlag" class="proxy-geo-flag" aria-hidden="true">🌐</span>
+            </div>
             <div id="proxyGeoProviderRow" class="proxy-geo-provider-row">
               <span>Провайдер</span>
               <span id="proxyGeoProvider" class="proxy-geo-provider"></span>

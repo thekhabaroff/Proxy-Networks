@@ -11,9 +11,9 @@
       <aside class="sidebar" aria-label="Профили и ссылки">
         <div class="brand-lockup sidebar-brand">
           <img class="brand-mark" src="images/logo-brand-48.png" width="38" height="38" alt="" />
-          <div>
-            <p class="eyebrow">PROXY NETWORKS</p>
-            <h1>Профили</h1>
+          <div class="sidebar-title">
+            <h1>Proxy Networks</h1>
+            <span id="settingsVersionBadge" class="sidebar-version-badge" title="Версия расширения">v1.0.0</span>
           </div>
         </div>
         <div class="sidebar-header">
@@ -24,7 +24,42 @@
           <button id="importProfilesButton" type="button">Импорт</button>
           <input id="importProfilesInput" class="hidden" type="file" accept="application/json" />
         </div>
+        <h2 class="profiles-heading">Профили</h2>
         <div id="profilesList" class="profiles-list" role="group" aria-label="Список профилей"></div>
+        <aside class="profile-inspector" aria-label="Диагностика и geosite-базы">
+          <section class="inspector-card">
+            <div class="inspector-heading">
+              <div>
+                <p class="eyebrow">PROFILE HEALTH</p>
+                <h3>Диагностика</h3>
+              </div>
+              <span id="diagnosticsState" class="state-badge">Не сохранён</span>
+            </div>
+            <p id="diagnosticsProfileName" class="inspector-profile-name">Новый профиль</p>
+            <dl class="diagnostics-list">
+              <div><dt>Маршрут</dt><dd id="diagnosticsRouting">Весь трафик</dd></div>
+              <div><dt>Прокси</dt><dd id="diagnosticsEndpoints">0 из 3</dd></div>
+              <div><dt>Исключения</dt><dd id="diagnosticsBypass">0</dd></div>
+              <div><dt>Блокировка</dt><dd id="diagnosticsBlock">0</dd></div>
+            </dl>
+            <button id="diagnosticsCheckButton" type="button">Проверить соединения</button>
+            <div id="diagnosticsResults" class="diagnostics-results" role="status" aria-live="polite">Проверка ещё не запускалась.</div>
+          </section>
+
+          <section class="inspector-card">
+            <div class="inspector-heading">
+              <div>
+                <p class="eyebrow">DATABASES</p>
+                <h3>Geosite-базы</h3>
+              </div>
+              <button id="refreshGeositeButton" type="button" class="compact-button">Обновить</button>
+            </div>
+            <div id="geositeStatusList" class="geosite-status-list" role="status" aria-live="polite">
+              В профиле нет geosite-баз.
+            </div>
+            <p class="hint">Кэш обновляется ежедневно в 00:00. Здесь можно запустить обновление вручную.</p>
+          </section>
+        </aside>
         <a class="sidebar-link" href="https://tg.cryptonetworks.online/connect" target="_blank" rel="noopener noreferrer">Бесплатный прокси для Telegram</a>
         <a class="sidebar-link" href="https://t.me/cryptonetworks_bot" target="_blank" rel="noopener noreferrer">Стабильный VPN — 99 ₽/мес</a>
       </aside>
@@ -187,41 +222,6 @@
             <button id="saveButton" type="submit" class="primary">Сохранить</button>
           </div>
         </form>
-
-        <aside class="profile-inspector" aria-label="Диагностика и geosite-базы">
-          <section class="inspector-card">
-            <div class="inspector-heading">
-              <div>
-                <p class="eyebrow">PROFILE HEALTH</p>
-                <h3>Диагностика</h3>
-              </div>
-              <span id="diagnosticsState" class="state-badge">Не сохранён</span>
-            </div>
-            <p id="diagnosticsProfileName" class="inspector-profile-name">Новый профиль</p>
-            <dl class="diagnostics-list">
-              <div><dt>Маршрут</dt><dd id="diagnosticsRouting">Весь трафик</dd></div>
-              <div><dt>Прокси</dt><dd id="diagnosticsEndpoints">0 из 3</dd></div>
-              <div><dt>Исключения</dt><dd id="diagnosticsBypass">0</dd></div>
-              <div><dt>Блокировка</dt><dd id="diagnosticsBlock">0</dd></div>
-            </dl>
-            <button id="diagnosticsCheckButton" type="button">Проверить соединения</button>
-            <div id="diagnosticsResults" class="diagnostics-results" role="status" aria-live="polite">Проверка ещё не запускалась.</div>
-          </section>
-
-          <section class="inspector-card">
-            <div class="inspector-heading">
-              <div>
-                <p class="eyebrow">DATABASES</p>
-                <h3>Geosite-базы</h3>
-              </div>
-              <button id="refreshGeositeButton" type="button" class="compact-button">Обновить</button>
-            </div>
-            <div id="geositeStatusList" class="geosite-status-list" role="status" aria-live="polite">
-              В профиле нет geosite-баз.
-            </div>
-            <p class="hint">Кэш обновляется ежедневно в 00:00. Здесь можно запустить обновление вручную.</p>
-          </section>
-        </aside>
 
       </section>
     </main>

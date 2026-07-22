@@ -15,6 +15,7 @@ const profileSelect = document.getElementById('profileSelect');
 const protocolSelect = document.getElementById('protocolSelect');
 const protocolField = document.getElementById('protocolField');
 const proxyGeoInfo = document.getElementById('proxyGeoInfo');
+const proxyGeoFlag = document.getElementById('proxyGeoFlag');
 const proxyGeoLocation = document.getElementById('proxyGeoLocation');
 const proxyGeoProviderRow = document.getElementById('proxyGeoProviderRow');
 const proxyGeoProvider = document.getElementById('proxyGeoProvider');
@@ -106,13 +107,16 @@ function renderProxyGeo(result) {
     const city = result.geo.city && result.geo.city !== 'Город не указан'
       ? ` · ${result.geo.city}`
       : '';
-    proxyGeoLocation.textContent = `${result.geo.flag ?? '🌐'} ${result.geo.country ?? 'Страна не указана'}${city}`;
+    proxyGeoFlag.textContent = result.geo.flag ?? '🌐';
+    proxyGeoFlag.classList.remove('hidden');
+    proxyGeoLocation.textContent = `${result.geo.country ?? 'Страна не указана'}${city}`;
     proxyGeoProvider.textContent = result.geo.provider ?? 'Не указан';
     proxyGeoProviderRow.classList.remove('hidden');
     return;
   }
 
   proxyGeoLocation.textContent = result.error || 'Не удалось определить локацию прокси.';
+  proxyGeoFlag.classList.add('hidden');
   proxyGeoProvider.textContent = '';
   proxyGeoProviderRow.classList.add('hidden');
 }
@@ -126,6 +130,7 @@ async function loadProxyGeo() {
   }
 
   proxyGeoInfo.classList.remove('hidden');
+  proxyGeoFlag.classList.add('hidden');
   proxyGeoLocation.textContent = 'Прокси: определяю локацию…';
   proxyGeoProvider.textContent = '';
   proxyGeoProviderRow.classList.add('hidden');

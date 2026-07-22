@@ -59,6 +59,7 @@ const importProfilesInput = document.getElementById('importProfilesInput');
 const togglePasswordButton = document.getElementById('togglePasswordButton');
 const clearPasswordButton = document.getElementById('clearPasswordButton');
 const pasteProxyButton = document.getElementById('pasteProxyButton');
+const settingsVersionBadge = document.getElementById('settingsVersionBadge');
 const diagnosticsState = document.getElementById('diagnosticsState');
 const diagnosticsProfileName = document.getElementById('diagnosticsProfileName');
 const diagnosticsRouting = document.getElementById('diagnosticsRouting');
@@ -95,6 +96,8 @@ const PROXY_RESULT_TIMEOUT_MS = 10000;
 const EXPORT_FORMAT = 'proxy-networks-export';
 const EXPORT_VERSION = 2;
 const EXPORT_KDF_ITERATIONS = 250000;
+
+settingsVersionBadge.textContent = `v${chrome.runtime.getManifest().version}`;
 
 function showError(message) {
   if (!message) {

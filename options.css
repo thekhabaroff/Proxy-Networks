@@ -64,6 +64,8 @@ textarea {
   min-height: 100vh;
   padding: 24px 16px;
   flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
   background:
     linear-gradient(180deg, rgba(83, 229, 209, 0.07), transparent 22%),
     var(--sidebar);
@@ -104,6 +106,29 @@ textarea {
   font-weight: 700;
 }
 
+.sidebar-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.sidebar-version-badge {
+  display: inline-flex;
+  min-height: 20px;
+  padding: 3px 6px;
+  align-items: center;
+  border: 1px solid rgba(83, 229, 209, 0.22);
+  border-radius: 999px;
+  color: var(--accent-bright);
+  background: rgba(83, 229, 209, 0.08);
+  font-size: 9px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
 .sidebar-header {
   display: flex;
   margin-top: 27px;
@@ -124,10 +149,19 @@ textarea {
 .profiles-list {
   display: grid;
   gap: 7px;
-  max-height: calc(100vh - 255px);
-  margin-top: 21px;
+  max-height: 20rem;
+  margin-top: 7px;
   padding-right: 3px;
   overflow: auto;
+}
+
+.profiles-heading {
+  margin: 18px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0.02em;
+  text-align: center;
 }
 
 .sidebar-link {
@@ -302,7 +336,7 @@ button:hover:not(:disabled):not(.profile-item.active) {
 
 .editor {
   display: grid;
-  grid-template-columns: minmax(0, 48rem) minmax(18rem, 24rem);
+  grid-template-columns: minmax(0, 48rem);
   grid-template-rows: auto 1fr;
   align-items: start;
   column-gap: clamp(24px, 4vw, 58px);
@@ -688,25 +722,22 @@ textarea:focus-visible,
 }
 
 .profile-inspector {
-  position: sticky;
-  top: 30px;
-  grid-column: 2;
-  grid-row: 1 / span 2;
   display: grid;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
+  margin-top: 10px;
 }
 
 .inspector-card {
   display: grid;
-  gap: 13px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 12px;
   background:
     linear-gradient(145deg, rgba(83, 229, 209, 0.075), transparent 40%),
     rgba(7, 27, 36, 0.9);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
 }
 
 .inspector-heading {
@@ -718,7 +749,7 @@ textarea:focus-visible,
 
 .inspector-heading h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .state-badge {
@@ -746,7 +777,7 @@ textarea:focus-visible,
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -758,8 +789,8 @@ textarea:focus-visible,
 
 .diagnostics-list > div {
   display: flex;
-  min-height: 29px;
-  padding: 6px 0;
+  min-height: 25px;
+  padding: 4px 0;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -768,6 +799,7 @@ textarea:focus-visible,
 
 .diagnostics-list dt {
   color: var(--muted);
+  font-size: 11px;
 }
 
 .diagnostics-list dd {
@@ -775,11 +807,12 @@ textarea:focus-visible,
   color: #d9f3f0;
   font-weight: 620;
   text-align: right;
+  font-size: 11px;
 }
 
 .diagnostics-results {
-  min-height: 38px;
-  padding: 9px 10px;
+  min-height: 33px;
+  padding: 8px 9px;
   border: 1px solid rgba(126, 243, 227, 0.09);
   border-radius: 9px;
   color: var(--muted);
@@ -941,16 +974,6 @@ textarea::-webkit-scrollbar-thumb {
   .editor {
     grid-template-columns: minmax(0, 48rem);
   }
-
-  .profile-inspector {
-    position: static;
-    grid-column: 1;
-    grid-row: 3;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-    max-width: 48rem;
-    margin-top: 20px;
-  }
 }
 
 @media (max-width: 56.25rem) {
@@ -989,8 +1012,7 @@ textarea::-webkit-scrollbar-thumb {
     align-self: flex-end;
   }
 
-  .routing-settings,
-  .profile-inspector {
+  .routing-settings {
     grid-template-columns: 1fr;
   }
 }

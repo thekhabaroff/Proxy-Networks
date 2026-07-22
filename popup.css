@@ -61,7 +61,7 @@ input {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .brand-lockup {
@@ -69,9 +69,18 @@ input {
   gap: 9px;
 }
 
+.header .brand-lockup {
+  gap: 7px;
+}
+
 .brand-mark {
   flex: 0 0 auto;
   filter: drop-shadow(0 0 10px rgba(83, 229, 209, 0.34));
+}
+
+.header .brand-mark {
+  width: 28px;
+  height: 28px;
 }
 
 .eyebrow {
@@ -86,28 +95,29 @@ input {
 .header h1 {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.15;
+  white-space: nowrap;
 }
 
 .settings-button {
   display: grid;
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
   padding: 0;
   place-items: center;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  color: var(--muted);
-  background: transparent;
+  border: 1px solid rgba(83, 229, 209, 0.18);
+  border-radius: 8px;
+  color: #8df8e6;
+  background: rgba(83, 229, 209, 0.06);
 }
 
 .version-badge {
   display: inline-flex;
-  min-height: 22px;
+  min-height: 28px;
   padding: 3px 7px;
   align-items: center;
   border: 1px solid rgba(83, 229, 209, 0.22);
@@ -120,16 +130,56 @@ input {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   line-height: 1;
+  text-decoration: none;
+  transition: 160ms ease;
+}
+
+.telegram-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(83, 229, 209, 0.18);
+  border-radius: 8px;
+  color: #8df8e6;
+  background: rgba(83, 229, 209, 0.06);
+  transition: 160ms ease;
+}
+
+.telegram-button svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.telegram-button:hover,
+.telegram-button:focus-visible,
+button.settings-button:hover:not(:disabled),
+button.settings-button:focus-visible {
+  border-color: var(--accent);
+  color: #04201d;
+  background: var(--accent-bright);
+  box-shadow: 0 0 12px rgba(83, 229, 209, 0.24);
+  outline: none;
+}
+
+.version-badge:hover,
+.version-badge:focus-visible {
+  border-color: var(--accent);
+  color: #dffff9;
+  background: rgba(83, 229, 209, 0.17);
+  box-shadow: 0 0 10px rgba(83, 229, 209, 0.16);
+  outline: none;
 }
 
 .settings-button svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.65;
+  stroke-width: 1.8;
 }
 
 .card,
@@ -364,10 +414,25 @@ select:disabled,
 
 .proxy-geo-info {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   padding-bottom: 8px;
   border-bottom: 1px solid rgba(126, 243, 227, 0.1);
+}
+
+.proxy-geo-flag {
+  width: max-content;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
+  font-size: 21px;
+  line-height: 1;
+}
+
+.proxy-geo-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .proxy-geo-location {
