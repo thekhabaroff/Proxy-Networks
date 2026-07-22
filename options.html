@@ -36,12 +36,18 @@
               <span id="diagnosticsState" class="state-badge">Не сохранён</span>
             </div>
             <p id="diagnosticsProfileName" class="inspector-profile-name">Новый профиль</p>
-            <dl class="diagnostics-list">
-              <div><dt>Маршрут</dt><dd id="diagnosticsRouting">Весь трафик</dd></div>
-              <div><dt>Прокси</dt><dd id="diagnosticsEndpoints">0 из 3</dd></div>
-              <div><dt>Исключения</dt><dd id="diagnosticsBypass">0</dd></div>
-              <div><dt>Блокировка</dt><dd id="diagnosticsBlock">0</dd></div>
-            </dl>
+            <div class="diagnostics-route">
+              <span>Маршрут</span>
+              <strong id="diagnosticsRouting">Весь трафик</strong>
+            </div>
+            <div class="diagnostics-protocols">
+              <span>Протоколы</span>
+              <div id="diagnosticsProtocols" class="diagnostics-protocol-list" aria-label="Настроенные протоколы"></div>
+            </div>
+            <div class="diagnostics-stats">
+              <div><span>Исключения</span><strong id="diagnosticsBypass">Нет</strong></div>
+              <div><span>Блокировка</span><strong id="diagnosticsBlock">Нет</strong></div>
+            </div>
             <button id="diagnosticsCheckButton" type="button">Проверить соединения</button>
             <div id="diagnosticsResults" class="diagnostics-results" role="status" aria-live="polite">Проверка ещё не запускалась.</div>
           </section>

@@ -63,7 +63,7 @@ const settingsVersionBadge = document.getElementById('settingsVersionBadge');
 const diagnosticsState = document.getElementById('diagnosticsState');
 const diagnosticsProfileName = document.getElementById('diagnosticsProfileName');
 const diagnosticsRouting = document.getElementById('diagnosticsRouting');
-const diagnosticsEndpoints = document.getElementById('diagnosticsEndpoints');
+const diagnosticsProtocols = document.getElementById('diagnosticsProtocols');
 const diagnosticsBypass = document.getElementById('diagnosticsBypass');
 const diagnosticsBlock = document.getElementById('diagnosticsBlock');
 const diagnosticsCheckButton = document.getElementById('diagnosticsCheckButton');
@@ -551,17 +551,32 @@ async function loadGeositeStatuses() {
   }
 }
 
+function renderDiagnosticsProtocols(profile) {
+  const protocols = getConfiguredProtocols(profile);
+  diagnosticsProtocols.replaceChildren();
+  if (protocols.length === 0) {
+    diagnosticsProtocols.textContent = 'Не настроены';
+    return;
+  }
+  for (const protocol of protocols) {
+    const item = document.createElement('span');
+    item.className = 'diagnostics-protocol';
+    item.textContent = PROTOCOL_NAMES[protocol];
+    diagnosticsProtocols.append(item);
+  }
+}
+
 async function refreshDiagnostics() {
   const draft = collectProfile();
   const endpoints = [draft.proxyForHttp, draft.proxyForHttps, draft.socks].filter(Boolean).length;
   diagnosticsProfileName.textContent = draft.name || 'Новый профиль';
-  diagnosticsEndpoints.textContent = `${endpoints} из 3`;
-  diagnosticsBypass.textContent = String(
-    (draft.routingMode === 'selected' ? 0 : draft.bypassList.length)
-      + (draft.bypassRussianResources ? 1 : 0)
-      + (draft.bypassLocalNetworks ? 1 : 0),
-  );
-  diagnosticsBlock.textContent = String(draft.routingMode === 'selected' ? 0 : draft.blockList.length);
+  renderDiagnosticsProtocols(draft);
+  const bypassCount = (draft.routingMode === 'selected' ? 0 : draft.bypassList.length)
+    + (draft.bypassRussianResources ? 1 : 0)
+    + (draft.bypassLocalNetworks ? 1 : 0);
+  diagnosticsBypass.textContent = bypassCount > 0 ? String(bypassCount) : 'Нет';
+  const blockCount = draft.routingMode === 'selected' ? 0 : draft.blockList.length;
+  diagnosticsBlock.textContent = blockCount > 0 ? String(blockCount) : 'Нет';
   diagnosticsCheckButton.disabled = endpoints === 0;
   updateRoutingVisibility();
 
